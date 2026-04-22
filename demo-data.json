@@ -1,0 +1,1908 @@
+{
+  "nextId": 205,
+  "categories": [
+    {
+      "id": 1,
+      "name": "Groceries",
+      "isIncome": false,
+      "color": "#4ade80",
+      "bucketId": null
+    },
+    {
+      "id": 2,
+      "name": "Home Improvement",
+      "isIncome": false,
+      "color": "#fb923c",
+      "bucketId": null
+    },
+    {
+      "id": 3,
+      "name": "Household Items",
+      "isIncome": false,
+      "color": "#60a5fa",
+      "bucketId": null
+    },
+    {
+      "id": 4,
+      "name": "Drugstore",
+      "isIncome": false,
+      "color": "#a78bfa",
+      "bucketId": null
+    },
+    {
+      "id": 5,
+      "name": "Family Spending",
+      "isIncome": false,
+      "color": "#f472b6",
+      "bucketId": null
+    },
+    {
+      "id": 6,
+      "name": "Gas",
+      "isIncome": false,
+      "color": "#facc15",
+      "bucketId": null
+    },
+    {
+      "id": 7,
+      "name": "Mortgage",
+      "isIncome": false,
+      "color": "#94a3b8",
+      "bucketId": null
+    },
+    {
+      "id": 8,
+      "name": "Phones",
+      "isIncome": false,
+      "color": "#64748b",
+      "bucketId": null
+    },
+    {
+      "id": 9,
+      "name": "Internet",
+      "isIncome": false,
+      "color": "#22d3ee",
+      "bucketId": null
+    },
+    {
+      "id": 10,
+      "name": "Hydro",
+      "isIncome": false,
+      "color": "#34d399",
+      "bucketId": null
+    },
+    {
+      "id": 11,
+      "name": "Netflix",
+      "isIncome": false,
+      "color": "#ef4444",
+      "bucketId": null
+    },
+    {
+      "id": 12,
+      "name": "Spotify",
+      "isIncome": false,
+      "color": "#86efac",
+      "bucketId": null
+    },
+    {
+      "id": 13,
+      "name": "Gym",
+      "isIncome": false,
+      "color": "#fbbf24",
+      "bucketId": null
+    },
+    {
+      "id": 14,
+      "name": "Home Renovation",
+      "isIncome": false,
+      "color": "#f97316",
+      "bucketId": null
+    },
+    {
+      "id": 15,
+      "name": "Incidentals",
+      "isIncome": false,
+      "color": "#e879f9",
+      "bucketId": null
+    },
+    {
+      "id": 16,
+      "name": "Travel",
+      "isIncome": false,
+      "color": "#38bdf8",
+      "bucketId": null
+    },
+    {
+      "id": 17,
+      "name": "Salary",
+      "isIncome": true,
+      "color": "#4ade80",
+      "bucketId": null
+    },
+    {
+      "id": 18,
+      "name": "Bonus",
+      "isIncome": true,
+      "color": "#86efac",
+      "bucketId": null
+    }
+  ],
+  "categoryRules": [
+    {
+      "id": 184,
+      "pattern": "loblaws",
+      "type": "contains",
+      "categoryId": 1,
+      "amount": null
+    },
+    {
+      "id": 185,
+      "pattern": "superstore",
+      "type": "contains",
+      "categoryId": 1,
+      "amount": null
+    },
+    {
+      "id": 186,
+      "pattern": "costco wholesale",
+      "type": "contains",
+      "categoryId": 1,
+      "amount": null
+    },
+    {
+      "id": 187,
+      "pattern": "netflix",
+      "type": "contains",
+      "categoryId": 11,
+      "amount": null
+    },
+    {
+      "id": 188,
+      "pattern": "spotify",
+      "type": "contains",
+      "categoryId": 12,
+      "amount": null
+    },
+    {
+      "id": 189,
+      "pattern": "goodlife",
+      "type": "contains",
+      "categoryId": 13,
+      "amount": null
+    },
+    {
+      "id": 190,
+      "pattern": "telus mobility",
+      "type": "contains",
+      "categoryId": 8,
+      "amount": null
+    },
+    {
+      "id": 191,
+      "pattern": "shaw internet",
+      "type": "contains",
+      "categoryId": 9,
+      "amount": null
+    },
+    {
+      "id": 192,
+      "pattern": "hydro",
+      "type": "contains",
+      "categoryId": 10,
+      "amount": null
+    },
+    {
+      "id": 193,
+      "pattern": "mortgage pmt",
+      "type": "contains",
+      "categoryId": 7,
+      "amount": null
+    },
+    {
+      "id": 194,
+      "pattern": "payroll deposit",
+      "type": "contains",
+      "categoryId": 17,
+      "amount": null
+    },
+    {
+      "id": 195,
+      "pattern": "annual bonus",
+      "type": "contains",
+      "categoryId": 18,
+      "amount": null
+    },
+    {
+      "id": 196,
+      "pattern": "esso gas",
+      "type": "contains",
+      "categoryId": 6,
+      "amount": null
+    },
+    {
+      "id": 197,
+      "pattern": "shell gas",
+      "type": "contains",
+      "categoryId": 6,
+      "amount": null
+    },
+    {
+      "id": 198,
+      "pattern": "shoppers drug mart",
+      "type": "contains",
+      "categoryId": 4,
+      "amount": null
+    },
+    {
+      "id": 199,
+      "pattern": "home depot",
+      "type": "contains",
+      "categoryId": 2,
+      "amount": null
+    },
+    {
+      "id": 200,
+      "pattern": "walmart supercenter",
+      "type": "contains",
+      "categoryId": 3,
+      "amount": null
+    }
+  ],
+  "budgetGroups": [
+    {
+      "id": 19,
+      "name": "High Variable",
+      "sortOrder": 0,
+      "isOccasional": false
+    },
+    {
+      "id": 20,
+      "name": "Low Variable",
+      "sortOrder": 1,
+      "isOccasional": false
+    },
+    {
+      "id": 21,
+      "name": "Fixed Bills",
+      "sortOrder": 2,
+      "isOccasional": false
+    },
+    {
+      "id": 22,
+      "name": "Subscriptions",
+      "sortOrder": 3,
+      "isOccasional": false
+    },
+    {
+      "id": 23,
+      "name": "Occasional",
+      "sortOrder": 4,
+      "isOccasional": true
+    }
+  ],
+  "budgets": [
+    {
+      "id": 24,
+      "month": "2026-04",
+      "categoryId": 1,
+      "targetAmount": 700,
+      "groupId": 19
+    },
+    {
+      "id": 25,
+      "month": "2026-04",
+      "categoryId": 2,
+      "targetAmount": 200,
+      "groupId": 19
+    },
+    {
+      "id": 26,
+      "month": "2026-04",
+      "categoryId": 3,
+      "targetAmount": 120,
+      "groupId": 19
+    },
+    {
+      "id": 27,
+      "month": "2026-04",
+      "categoryId": 4,
+      "targetAmount": 80,
+      "groupId": 19
+    },
+    {
+      "id": 28,
+      "month": "2026-04",
+      "categoryId": 5,
+      "targetAmount": 200,
+      "groupId": 19
+    },
+    {
+      "id": 29,
+      "month": "2026-04",
+      "categoryId": 6,
+      "targetAmount": 180,
+      "groupId": 20
+    },
+    {
+      "id": 30,
+      "month": "2026-04",
+      "categoryId": 7,
+      "targetAmount": 1850,
+      "groupId": 21
+    },
+    {
+      "id": 31,
+      "month": "2026-04",
+      "categoryId": 8,
+      "targetAmount": 120,
+      "groupId": 21
+    },
+    {
+      "id": 32,
+      "month": "2026-04",
+      "categoryId": 9,
+      "targetAmount": 75,
+      "groupId": 21
+    },
+    {
+      "id": 33,
+      "month": "2026-04",
+      "categoryId": 10,
+      "targetAmount": 130,
+      "groupId": 21
+    },
+    {
+      "id": 34,
+      "month": "2026-04",
+      "categoryId": 11,
+      "targetAmount": 18,
+      "groupId": 22
+    },
+    {
+      "id": 35,
+      "month": "2026-04",
+      "categoryId": 12,
+      "targetAmount": 11,
+      "groupId": 22
+    },
+    {
+      "id": 36,
+      "month": "2026-04",
+      "categoryId": 13,
+      "targetAmount": 55,
+      "groupId": 22
+    },
+    {
+      "id": 37,
+      "month": "2026-04",
+      "categoryId": 14,
+      "targetAmount": 500,
+      "groupId": 23
+    },
+    {
+      "id": 38,
+      "month": "2026-04",
+      "categoryId": 15,
+      "targetAmount": 100,
+      "groupId": 23
+    },
+    {
+      "id": 39,
+      "month": "2026-04",
+      "categoryId": 16,
+      "targetAmount": 300,
+      "groupId": 23
+    },
+    {
+      "id": 40,
+      "month": "2026-04",
+      "categoryId": 17,
+      "targetAmount": 6500,
+      "groupId": null
+    },
+    {
+      "id": 41,
+      "month": "2026-04",
+      "categoryId": 18,
+      "targetAmount": 0,
+      "groupId": null
+    },
+    {
+      "id": 42,
+      "month": "2026-03",
+      "categoryId": 1,
+      "targetAmount": 700,
+      "groupId": 19
+    },
+    {
+      "id": 43,
+      "month": "2026-03",
+      "categoryId": 2,
+      "targetAmount": 200,
+      "groupId": 19
+    },
+    {
+      "id": 44,
+      "month": "2026-03",
+      "categoryId": 3,
+      "targetAmount": 120,
+      "groupId": 19
+    },
+    {
+      "id": 45,
+      "month": "2026-03",
+      "categoryId": 4,
+      "targetAmount": 80,
+      "groupId": 19
+    },
+    {
+      "id": 46,
+      "month": "2026-03",
+      "categoryId": 5,
+      "targetAmount": 200,
+      "groupId": 19
+    },
+    {
+      "id": 47,
+      "month": "2026-03",
+      "categoryId": 6,
+      "targetAmount": 180,
+      "groupId": 20
+    },
+    {
+      "id": 48,
+      "month": "2026-03",
+      "categoryId": 7,
+      "targetAmount": 1850,
+      "groupId": 21
+    },
+    {
+      "id": 49,
+      "month": "2026-03",
+      "categoryId": 8,
+      "targetAmount": 120,
+      "groupId": 21
+    },
+    {
+      "id": 50,
+      "month": "2026-03",
+      "categoryId": 9,
+      "targetAmount": 75,
+      "groupId": 21
+    },
+    {
+      "id": 51,
+      "month": "2026-03",
+      "categoryId": 10,
+      "targetAmount": 130,
+      "groupId": 21
+    },
+    {
+      "id": 52,
+      "month": "2026-03",
+      "categoryId": 11,
+      "targetAmount": 18,
+      "groupId": 22
+    },
+    {
+      "id": 53,
+      "month": "2026-03",
+      "categoryId": 12,
+      "targetAmount": 11,
+      "groupId": 22
+    },
+    {
+      "id": 54,
+      "month": "2026-03",
+      "categoryId": 13,
+      "targetAmount": 55,
+      "groupId": 22
+    },
+    {
+      "id": 55,
+      "month": "2026-03",
+      "categoryId": 14,
+      "targetAmount": 500,
+      "groupId": 23
+    },
+    {
+      "id": 56,
+      "month": "2026-03",
+      "categoryId": 15,
+      "targetAmount": 100,
+      "groupId": 23
+    },
+    {
+      "id": 57,
+      "month": "2026-03",
+      "categoryId": 16,
+      "targetAmount": 300,
+      "groupId": 23
+    },
+    {
+      "id": 58,
+      "month": "2026-03",
+      "categoryId": 17,
+      "targetAmount": 6500,
+      "groupId": null
+    },
+    {
+      "id": 59,
+      "month": "2026-03",
+      "categoryId": 18,
+      "targetAmount": 0,
+      "groupId": null
+    },
+    {
+      "id": 60,
+      "month": "2026-02",
+      "categoryId": 1,
+      "targetAmount": 700,
+      "groupId": 19
+    },
+    {
+      "id": 61,
+      "month": "2026-02",
+      "categoryId": 2,
+      "targetAmount": 200,
+      "groupId": 19
+    },
+    {
+      "id": 62,
+      "month": "2026-02",
+      "categoryId": 3,
+      "targetAmount": 120,
+      "groupId": 19
+    },
+    {
+      "id": 63,
+      "month": "2026-02",
+      "categoryId": 4,
+      "targetAmount": 80,
+      "groupId": 19
+    },
+    {
+      "id": 64,
+      "month": "2026-02",
+      "categoryId": 5,
+      "targetAmount": 200,
+      "groupId": 19
+    },
+    {
+      "id": 65,
+      "month": "2026-02",
+      "categoryId": 6,
+      "targetAmount": 180,
+      "groupId": 20
+    },
+    {
+      "id": 66,
+      "month": "2026-02",
+      "categoryId": 7,
+      "targetAmount": 1850,
+      "groupId": 21
+    },
+    {
+      "id": 67,
+      "month": "2026-02",
+      "categoryId": 8,
+      "targetAmount": 120,
+      "groupId": 21
+    },
+    {
+      "id": 68,
+      "month": "2026-02",
+      "categoryId": 9,
+      "targetAmount": 75,
+      "groupId": 21
+    },
+    {
+      "id": 69,
+      "month": "2026-02",
+      "categoryId": 10,
+      "targetAmount": 130,
+      "groupId": 21
+    },
+    {
+      "id": 70,
+      "month": "2026-02",
+      "categoryId": 11,
+      "targetAmount": 18,
+      "groupId": 22
+    },
+    {
+      "id": 71,
+      "month": "2026-02",
+      "categoryId": 12,
+      "targetAmount": 11,
+      "groupId": 22
+    },
+    {
+      "id": 72,
+      "month": "2026-02",
+      "categoryId": 13,
+      "targetAmount": 55,
+      "groupId": 22
+    },
+    {
+      "id": 73,
+      "month": "2026-02",
+      "categoryId": 14,
+      "targetAmount": 500,
+      "groupId": 23
+    },
+    {
+      "id": 74,
+      "month": "2026-02",
+      "categoryId": 15,
+      "targetAmount": 100,
+      "groupId": 23
+    },
+    {
+      "id": 75,
+      "month": "2026-02",
+      "categoryId": 16,
+      "targetAmount": 300,
+      "groupId": 23
+    },
+    {
+      "id": 76,
+      "month": "2026-02",
+      "categoryId": 17,
+      "targetAmount": 6500,
+      "groupId": null
+    },
+    {
+      "id": 77,
+      "month": "2026-02",
+      "categoryId": 18,
+      "targetAmount": 0,
+      "groupId": null
+    },
+    {
+      "id": 78,
+      "month": "2026-01",
+      "categoryId": 1,
+      "targetAmount": 700,
+      "groupId": 19
+    },
+    {
+      "id": 79,
+      "month": "2026-01",
+      "categoryId": 2,
+      "targetAmount": 200,
+      "groupId": 19
+    },
+    {
+      "id": 80,
+      "month": "2026-01",
+      "categoryId": 3,
+      "targetAmount": 120,
+      "groupId": 19
+    },
+    {
+      "id": 81,
+      "month": "2026-01",
+      "categoryId": 4,
+      "targetAmount": 80,
+      "groupId": 19
+    },
+    {
+      "id": 82,
+      "month": "2026-01",
+      "categoryId": 5,
+      "targetAmount": 200,
+      "groupId": 19
+    },
+    {
+      "id": 83,
+      "month": "2026-01",
+      "categoryId": 6,
+      "targetAmount": 180,
+      "groupId": 20
+    },
+    {
+      "id": 84,
+      "month": "2026-01",
+      "categoryId": 7,
+      "targetAmount": 1850,
+      "groupId": 21
+    },
+    {
+      "id": 85,
+      "month": "2026-01",
+      "categoryId": 8,
+      "targetAmount": 120,
+      "groupId": 21
+    },
+    {
+      "id": 86,
+      "month": "2026-01",
+      "categoryId": 9,
+      "targetAmount": 75,
+      "groupId": 21
+    },
+    {
+      "id": 87,
+      "month": "2026-01",
+      "categoryId": 10,
+      "targetAmount": 130,
+      "groupId": 21
+    },
+    {
+      "id": 88,
+      "month": "2026-01",
+      "categoryId": 11,
+      "targetAmount": 18,
+      "groupId": 22
+    },
+    {
+      "id": 89,
+      "month": "2026-01",
+      "categoryId": 12,
+      "targetAmount": 11,
+      "groupId": 22
+    },
+    {
+      "id": 90,
+      "month": "2026-01",
+      "categoryId": 13,
+      "targetAmount": 55,
+      "groupId": 22
+    },
+    {
+      "id": 91,
+      "month": "2026-01",
+      "categoryId": 14,
+      "targetAmount": 500,
+      "groupId": 23
+    },
+    {
+      "id": 92,
+      "month": "2026-01",
+      "categoryId": 15,
+      "targetAmount": 100,
+      "groupId": 23
+    },
+    {
+      "id": 93,
+      "month": "2026-01",
+      "categoryId": 16,
+      "targetAmount": 300,
+      "groupId": 23
+    },
+    {
+      "id": 94,
+      "month": "2026-01",
+      "categoryId": 17,
+      "targetAmount": 6500,
+      "groupId": null
+    },
+    {
+      "id": 95,
+      "month": "2026-01",
+      "categoryId": 18,
+      "targetAmount": 0,
+      "groupId": null
+    }
+  ],
+  "transactions": [
+    {
+      "id": 96,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-02",
+      "amount": 284.5,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "LOBLAWS #1842 TORONTO ON",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 97,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-05",
+      "amount": 1850,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "DIRECT DEBIT MORTGAGE PMT",
+      "categoryId": 7,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 98,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-05",
+      "amount": 17.99,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "NETFLIX.COM",
+      "categoryId": 11,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 99,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-05",
+      "amount": 10.99,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "SPOTIFY PREMIUM",
+      "categoryId": 12,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 100,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-05",
+      "amount": 55,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "GOODLIFE FITNESS",
+      "categoryId": 13,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 101,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-08",
+      "amount": 78.4,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "ESSO GAS STATION",
+      "categoryId": 6,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 102,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-09",
+      "amount": 42.3,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "SHOPPERS DRUG MART",
+      "categoryId": 4,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 103,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-10",
+      "amount": 120,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "TELUS MOBILITY",
+      "categoryId": 8,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 104,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-12",
+      "amount": 156.8,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SUPERSTORE #0312 CALGARY AB",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 105,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-14",
+      "amount": 89.95,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "THE HARDWARE STORE",
+      "categoryId": 2,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 106,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-15",
+      "amount": 127.5,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "HYDRO PAYMENT",
+      "categoryId": 10,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 107,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-15",
+      "amount": 75,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SHAW INTERNET",
+      "categoryId": 9,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 108,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-17",
+      "amount": 63.2,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "WALMART SUPERCENTER",
+      "categoryId": 3,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 109,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-18",
+      "amount": 215.4,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "COSTCO WHOLESALE",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 110,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-20",
+      "amount": 91.2,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SHELL GAS",
+      "categoryId": 6,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 111,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-22",
+      "amount": 48,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "SCHOLASTIC BOOK ORDER",
+      "categoryId": 5,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 112,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-23",
+      "amount": 102.3,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "LOBLAWS #2271 OTTAWA ON",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 113,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-25",
+      "amount": 145.6,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "HOME DEPOT #1234",
+      "categoryId": 2,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 114,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-28",
+      "amount": 4332,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "PAYROLL DEPOSIT",
+      "categoryId": 17,
+      "linkedTransactionId": null,
+      "ignoreInBudget": true,
+      "comment": null
+    },
+    {
+      "id": 115,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-02",
+      "amount": 268.9,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "LOBLAWS #3015 MISSISSAUGA ON",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 116,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-03",
+      "amount": 1850,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "DIRECT DEBIT MORTGAGE PMT",
+      "categoryId": 7,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 117,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-04",
+      "amount": 17.99,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "NETFLIX.COM",
+      "categoryId": 11,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 118,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-04",
+      "amount": 10.99,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "SPOTIFY PREMIUM",
+      "categoryId": 12,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 119,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-04",
+      "amount": 55,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "GOODLIFE FITNESS",
+      "categoryId": 13,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 120,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-06",
+      "amount": 65.3,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "ESSO GAS STATION",
+      "categoryId": 6,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 121,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-09",
+      "amount": 31.8,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "SHOPPERS DRUG MART",
+      "categoryId": 4,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 122,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-10",
+      "amount": 120,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "TELUS MOBILITY",
+      "categoryId": 8,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 123,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-13",
+      "amount": 189.5,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SUPERSTORE #0615 EDMONTON AB",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 124,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-15",
+      "amount": 148.2,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "HYDRO PAYMENT",
+      "categoryId": 10,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 125,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-15",
+      "amount": 75,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SHAW INTERNET",
+      "categoryId": 9,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 126,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-17",
+      "amount": 54.6,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "WALMART SUPERCENTER",
+      "categoryId": 3,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 127,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-19",
+      "amount": 842.3,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "HOME DEPOT #1234",
+      "categoryId": 14,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 128,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-20",
+      "amount": 198.7,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "COSTCO WHOLESALE",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 129,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-22",
+      "amount": 82.1,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SHELL GAS",
+      "categoryId": 6,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 130,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-24",
+      "amount": 76.4,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "WALMART SUPERCENTER",
+      "categoryId": 5,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 131,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-28",
+      "amount": 4332,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "PAYROLL DEPOSIT",
+      "categoryId": 17,
+      "linkedTransactionId": null,
+      "ignoreInBudget": true,
+      "comment": null
+    },
+    {
+      "id": 132,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-31",
+      "amount": 2000,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "ANNUAL BONUS DEPOSIT",
+      "categoryId": 18,
+      "linkedTransactionId": null,
+      "ignoreInBudget": true,
+      "comment": null
+    },
+    {
+      "id": 133,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-02",
+      "amount": 241.6,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "LOBLAWS #1842 TORONTO ON",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 134,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-03",
+      "amount": 1850,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "DIRECT DEBIT MORTGAGE PMT",
+      "categoryId": 7,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 135,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-04",
+      "amount": 17.99,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "NETFLIX.COM",
+      "categoryId": 11,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 136,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-04",
+      "amount": 10.99,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "SPOTIFY PREMIUM",
+      "categoryId": 12,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 137,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-04",
+      "amount": 55,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "GOODLIFE FITNESS",
+      "categoryId": 13,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 138,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-07",
+      "amount": 71.5,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "ESSO GAS STATION",
+      "categoryId": 6,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 139,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-10",
+      "amount": 120,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "TELUS MOBILITY",
+      "categoryId": 8,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 140,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-12",
+      "amount": 174.3,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SUPERSTORE #0847 WINNIPEG MB",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 141,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-14",
+      "amount": 28.9,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "SHOPPERS DRUG MART",
+      "categoryId": 4,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 142,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-15",
+      "amount": 162.8,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "HYDRO PAYMENT",
+      "categoryId": 10,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 143,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-15",
+      "amount": 75,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SHAW INTERNET",
+      "categoryId": 9,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 144,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-18",
+      "amount": 88.2,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "WALMART SUPERCENTER",
+      "categoryId": 3,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 145,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-20",
+      "amount": 227.4,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "COSTCO WHOLESALE",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 146,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-21",
+      "amount": 1240,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "FLIGHTS EXPEDIA.COM",
+      "categoryId": 16,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 147,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-22",
+      "amount": 68.9,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SHELL GAS",
+      "categoryId": 6,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 148,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-24",
+      "amount": 52.3,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "CHAPTER INDIGO",
+      "categoryId": 5,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 149,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-26",
+      "amount": 118.7,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "LOBLAWS #2891 HAMILTON ON",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 150,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-28",
+      "amount": 4332,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "PAYROLL DEPOSIT",
+      "categoryId": 17,
+      "linkedTransactionId": null,
+      "ignoreInBudget": true,
+      "comment": null
+    },
+    {
+      "id": 151,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-02",
+      "amount": 298.4,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "LOBLAWS #1842 TORONTO ON",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 152,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-03",
+      "amount": 1850,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "DIRECT DEBIT MORTGAGE PMT",
+      "categoryId": 7,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 153,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-05",
+      "amount": 17.99,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "NETFLIX.COM",
+      "categoryId": 11,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 154,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-05",
+      "amount": 10.99,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "SPOTIFY PREMIUM",
+      "categoryId": 12,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 155,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-05",
+      "amount": 55,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "GOODLIFE FITNESS",
+      "categoryId": 13,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 156,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-07",
+      "amount": 84.6,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "ESSO GAS STATION",
+      "categoryId": 6,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 157,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-10",
+      "amount": 120,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "TELUS MOBILITY",
+      "categoryId": 8,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 158,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-12",
+      "amount": 201.5,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SUPERSTORE #1024 REGINA SK",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 159,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-15",
+      "amount": 158.4,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "HYDRO PAYMENT",
+      "categoryId": 10,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 160,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-15",
+      "amount": 75,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SHAW INTERNET",
+      "categoryId": 9,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 161,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-18",
+      "amount": 37.6,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "SHOPPERS DRUG MART",
+      "categoryId": 4,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 162,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-20",
+      "amount": 71.8,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "WALMART SUPERCENTER",
+      "categoryId": 3,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 163,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-21",
+      "amount": 234.8,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "HOME DEPOT #1234",
+      "categoryId": 2,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 164,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-22",
+      "amount": 189.6,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "COSTCO WHOLESALE",
+      "categoryId": 1,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 165,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-24",
+      "amount": 77.3,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "SHELL GAS",
+      "categoryId": 6,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 166,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-26",
+      "amount": 84.5,
+      "instrument": "Demo Credit Card CSV",
+      "descriptor": "SHOPPERS DRUG MART",
+      "categoryId": 5,
+      "linkedTransactionId": null,
+      "ignoreInBudget": false,
+      "comment": null
+    },
+    {
+      "id": 167,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-30",
+      "amount": 4332,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "PAYROLL DEPOSIT",
+      "categoryId": 17,
+      "linkedTransactionId": null,
+      "ignoreInBudget": true,
+      "comment": null
+    },
+    {
+      "id": 201,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_01.csv",
+      "txnDate": "2026-01-14",
+      "amount": 4332,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "PAYROLL DEPOSIT",
+      "categoryId": 17,
+      "linkedTransactionId": null,
+      "ignoreInBudget": true,
+      "comment": null
+    },
+    {
+      "id": 202,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_02.csv",
+      "txnDate": "2026-02-13",
+      "amount": 4332,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "PAYROLL DEPOSIT",
+      "categoryId": 17,
+      "linkedTransactionId": null,
+      "ignoreInBudget": true,
+      "comment": null
+    },
+    {
+      "id": 203,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_03.csv",
+      "txnDate": "2026-03-14",
+      "amount": 4332,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "PAYROLL DEPOSIT",
+      "categoryId": 17,
+      "linkedTransactionId": null,
+      "ignoreInBudget": true,
+      "comment": null
+    },
+    {
+      "id": 204,
+      "source": "bank_csv",
+      "sourceRef": "statement_2026_04.csv",
+      "txnDate": "2026-04-14",
+      "amount": 4332,
+      "instrument": "Demo Chequing CSV",
+      "descriptor": "PAYROLL DEPOSIT",
+      "categoryId": 17,
+      "linkedTransactionId": null,
+      "ignoreInBudget": true,
+      "comment": null
+    }
+  ],
+  "transactionSplits": [],
+  "savingsBuckets": [
+    {
+      "id": 168,
+      "name": "Emergency Fund"
+    },
+    {
+      "id": 169,
+      "name": "Vacation"
+    },
+    {
+      "id": 170,
+      "name": "Home Renovations"
+    }
+  ],
+  "savingsEntries": [
+    {
+      "id": 171,
+      "entryDate": "2026-01-01",
+      "bucketId": 168,
+      "amount": 8500,
+      "notes": "Opening balance",
+      "source": "manual",
+      "scheduleId": null
+    },
+    {
+      "id": 172,
+      "entryDate": "2026-02-01",
+      "bucketId": 168,
+      "amount": 300,
+      "notes": null,
+      "source": "schedule",
+      "scheduleId": null
+    },
+    {
+      "id": 173,
+      "entryDate": "2026-03-01",
+      "bucketId": 168,
+      "amount": 300,
+      "notes": null,
+      "source": "schedule",
+      "scheduleId": null
+    },
+    {
+      "id": 174,
+      "entryDate": "2026-04-01",
+      "bucketId": 168,
+      "amount": 300,
+      "notes": null,
+      "source": "schedule",
+      "scheduleId": null
+    },
+    {
+      "id": 175,
+      "entryDate": "2026-01-01",
+      "bucketId": 169,
+      "amount": 1200,
+      "notes": "Opening balance",
+      "source": "manual",
+      "scheduleId": null
+    },
+    {
+      "id": 176,
+      "entryDate": "2026-02-01",
+      "bucketId": 169,
+      "amount": 200,
+      "notes": null,
+      "source": "schedule",
+      "scheduleId": null
+    },
+    {
+      "id": 177,
+      "entryDate": "2026-02-21",
+      "bucketId": 169,
+      "amount": -1240,
+      "notes": "Flight to Toronto",
+      "source": "manual",
+      "scheduleId": null
+    },
+    {
+      "id": 178,
+      "entryDate": "2026-03-01",
+      "bucketId": 169,
+      "amount": 200,
+      "notes": null,
+      "source": "schedule",
+      "scheduleId": null
+    },
+    {
+      "id": 179,
+      "entryDate": "2026-04-01",
+      "bucketId": 169,
+      "amount": 200,
+      "notes": null,
+      "source": "schedule",
+      "scheduleId": null
+    },
+    {
+      "id": 180,
+      "entryDate": "2026-01-01",
+      "bucketId": 170,
+      "amount": 3000,
+      "notes": "Opening balance",
+      "source": "manual",
+      "scheduleId": null
+    },
+    {
+      "id": 181,
+      "entryDate": "2026-03-19",
+      "bucketId": 170,
+      "amount": -842.3,
+      "notes": "Home Depot — kitchen project",
+      "source": "manual",
+      "scheduleId": null
+    }
+  ],
+  "savingsSchedules": [],
+  "recurringTemplates": [],
+  "splitTemplates": [],
+  "experimentalBudgets": [],
+  "customParsers": [],
+  "completedMigrations": [
+    "purgeRecurringInstrumentTxns",
+    "normalizeInstrumentNames",
+    "deleteAllSavingsSchedules",
+    "purgeRecurringTemplates",
+    "applySplitRules"
+  ]
+}

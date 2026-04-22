@@ -1,0 +1,138 @@
+/* ── Design tokens ── */
+:root,
+html.light {
+  --bg:         #f4f6f8;
+  --bg-2:       #ffffff;
+  --bg-3:       #eaecef;
+  --card-bg:    #ffffff;
+  --card-bg-2:  #f4f6f8;
+  --input-bg:   #ffffff;
+  --border:     #d0d5dd;
+  --border-2:   #e0e4ea;
+  --bar-track:  #c8cbd4;
+  --bar-track-end: #a0a4b0;
+
+  --text:        #1a2332;
+  --text-2:      #4a5568;
+  --text-3:      #8a9ab0;
+
+  --accent:      #1677d2;
+  --accent-hover:#1265b8;
+  --accent-muted: rgba(22,119,210,0.12);
+  --accent-glow:  rgba(22,119,210,0.2);
+
+  --teal:        #1677d2;
+
+  --grad-start:  #1677d2;
+  --grad-end:    #60a5fa;
+
+  --green:       #1a9e8b;
+  --green-muted: rgba(26,158,139,0.12);
+  --red:         #e53e3e;
+  --red-muted:   rgba(229,62,62,0.1);
+  --neg-amount:  #c96a6a;
+  --yellow:      #d97706;
+  --yellow-muted: rgba(217,119,6,0.1);
+  --purple:      #7c3aed;
+  --savings-blue: #1e3a8a;
+
+  --radius-sm:  5px;
+  --radius:     8px;
+  --radius-lg:  12px;
+  --radius-xl:  16px;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04);
+  --shadow:    0 4px 12px rgba(0,0,0,0.10);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.14);
+
+  --toggle-bg: var(--bg-2);
+  --input-bg: var(--input-bg);
+  --border-color: var(--border);
+
+  color-scheme: light;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  font-size: 21px;
+  font-weight: 400;
+  color: var(--text);
+  background-color: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ── Dark mode tokens ── */
+html.dark {
+  --bg:         #0f1117;
+  --bg-2:       #1a1d27;
+  --bg-3:       #252836;
+  --card-bg:    #1a1d27;
+  --card-bg-2:  #0f1117;
+  --input-bg:   #1e2130;
+  --border:     #2e3347;
+  --border-2:   #252836;
+  --bar-track:  #3c4058;
+  --bar-track-end: #5a5e78;
+
+  --text:        #e8ecf4;
+  --text-2:      #b0bdd0;
+  --text-3:      #7a8aa0;
+
+  --accent:      #3b82f6;
+  --accent-hover:#2563eb;
+  --accent-muted: rgba(59,130,246,0.15);
+  --accent-glow:  rgba(59,130,246,0.25);
+
+  --teal:        #3b82f6;
+
+  --grad-start:  #3b82f6;
+  --grad-end:    #60a5fa;
+
+  --green:       #1fb8a3;
+  --green-muted: rgba(31,184,163,0.15);
+  --red:         #f05252;
+  --red-muted:   rgba(240,82,82,0.15);
+  --neg-amount:  #e08585;
+  --yellow:      #f59e0b;
+  --yellow-muted: rgba(245,158,11,0.15);
+  --purple:      #a78bfa;
+  --savings-blue: #60a5fa;
+
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
+  --shadow:    0 4px 12px rgba(0,0,0,0.5);
+  --shadow-lg: 0 8px 32px rgba(0,0,0,0.6);
+
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--bg);
+}
+
+input, select, button, textarea {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+h1, h2, h3, h4 {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+code {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 0.875em;
+  background: var(--bg-2);
+  padding: 0.15em 0.4em;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
