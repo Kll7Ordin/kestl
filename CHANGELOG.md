@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/Kll7Ordin/kestl/compare/v2.2.0...v2.2.1) (2026-04-22)
+
+
+### Bug Fixes
+
+* show spent for zero-target categories, always render YTD columns, align Add button ([7536070](https://github.com/Kll7Ordin/kestl/commit/7536070fa46ed3ecc2ed79b886ed9ca701873564))
+
 ## [2.2.0](https://github.com/Kll7Ordin/kestl/compare/v2.1.5...v2.2.0) (2026-04-22)
 
 

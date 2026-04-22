@@ -1,6 +1,6 @@
 [package]
 name = "budget-app"
-version = "2.2.0"
+version = "2.2.1"
 description = "Offline budgeting app"
 authors = ["you"]
 license = ""
