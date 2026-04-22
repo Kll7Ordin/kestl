@@ -27,18 +27,6 @@ function currentMonth(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-function prevMonths(month: string, n: number): string[] {
-  const [y, m] = month.split('-').map(Number);
-  const result: string[] = [];
-  let cy = y, cm = m;
-  for (let i = 0; i < n; i++) {
-    cm--;
-    if (cm < 1) { cm = 12; cy--; }
-    result.push(`${cy}-${String(cm).padStart(2, '0')}`);
-  }
-  return result;
-}
-
 interface BudgetRow {
   categoryId: number;
   categoryName: string;
