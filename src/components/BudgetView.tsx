@@ -265,7 +265,8 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
         const ytdRect = ytdTh.getBoundingClientRect();
         midpoint = (avgRect.right + ytdRect.left) / 2;
       } else {
-        midpoint = catRect.right + 600;
+        // No extra columns — allow only a small overflow for the arrow indicator
+        midpoint = catRect.right + 32;
       }
       // Track right end is 10px from cat td right; overflow measured from track right end
       const overflow = Math.max(0, midpoint - catRect.right + 18);
@@ -629,7 +630,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   const net = totalIncome - totalTarget;
   const grouped = groupRows(expenseRows, budgetGroups);
 
-  const COLS = priorMonthCount > 0 ? 7 : 3;
+  const COLS = 7;
   const [y, mon] = month.split('-').map(Number);
   const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const curYear = new Date().getFullYear();
@@ -821,10 +822,10 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
               <th style={{ width: 24 }}></th>
               <th data-col="category">Category</th>
               <th className="num" style={{ fontSize: '0.65rem', width: 72, padding: '0.55rem 6px' }}>Target</th>
-              {priorMonthCount > 0 && <th className="num" data-col="avg" style={{ fontSize: '0.65rem', width: 64, padding: '0.55rem 14px 0.55rem 6px' }}>Avg ±/mo</th>}
-              {priorMonthCount > 0 && <th className="num" data-col="ytd" style={{ opacity: 0.4, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px 0.55rem 12px', borderLeft: '2px solid var(--border)' }}>YTD</th>}
-              {priorMonthCount > 0 && <th className="num" data-col="ytd-target" style={{ opacity: 0.4, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}>YTD Tgt</th>}
-              {priorMonthCount > 0 && <th className="num" style={{ opacity: 0.4, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}>YTD Diff</th>}
+              <th className="num" data-col="avg" style={{ fontSize: '0.65rem', width: 64, padding: '0.55rem 14px 0.55rem 6px' }}>Avg ±/mo</th>
+              <th className="num" data-col="ytd" style={{ opacity: 0.4, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px 0.55rem 12px', borderLeft: '2px solid var(--border)' }}>YTD</th>
+              <th className="num" data-col="ytd-target" style={{ opacity: 0.4, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}>YTD Tgt</th>
+              <th className="num" style={{ opacity: 0.4, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}>YTD Diff</th>
             </tr>
           </thead>
           <tbody ref={tableBodyRef}>
@@ -996,18 +997,18 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                             </span>
                           </div>
                           {/* Centre: spent / left — absolute, centred horizontally over bar */}
-                          {r.target > 0 && (
+                          {(r.target > 0 || r.spent > 0) && (
                             <span
                               style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', fontSize: '0.8rem', whiteSpace: 'nowrap', cursor: onNavigateToTransactions ? 'pointer' : 'default', userSelect: 'none' }}
                               onClick={() => onNavigateToTransactions?.(month, r.categoryId)}
                             >
                               <strong>${formatAmount(r.spent, 0)}</strong>
-                              <span style={{ opacity: 0.5 }}> spent · </span>
-                              {r.spent > r.target ? (
+                              <span style={{ opacity: 0.5 }}>{r.target > 0 ? ' spent · ' : ' spent'}</span>
+                              {r.target > 0 && (r.spent > r.target ? (
                                 <><strong style={{ color: budgetDiffColor(r.spent - r.target, r.target, colorThresholds) }}>${formatAmount(r.spent - r.target, 0)}</strong><span style={{ opacity: 0.5 }}> over</span></>
                               ) : (
                                 <><strong style={{ color: '#16a34a' }}>${formatAmount(r.target - r.spent, 0)}</strong><span style={{ opacity: 0.5 }}> left</span></>
-                              )}
+                              ))}
                             </span>
                           )}
                         </div>
@@ -1078,19 +1079,13 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                         )}
                       </td>
                       {/* Avg ±/mo column */}
-                      {priorMonthCount > 0 && (
-                        <td className="num" style={{ fontSize: '0.8rem', fontWeight: 600, width: 64, padding: '7px 14px 0 6px', verticalAlign: 'top', color: budgetDiffColor(r.ytdAvgDiff, r.ytdTarget / Math.max(priorMonthCount, 1), colorThresholds) }}>
-                          {formatDiff(r.ytdAvgDiff)}
-                        </td>
-                      )}
+                      <td className="num" style={{ fontSize: '0.8rem', fontWeight: 600, width: 64, padding: '7px 14px 0 6px', verticalAlign: 'top', color: budgetDiffColor(r.ytdAvgDiff, r.ytdTarget / Math.max(priorMonthCount, 1), colorThresholds) }}>
+                        {formatDiff(r.ytdAvgDiff)}
+                      </td>
                       {/* YTD columns — dim */}
-                      {priorMonthCount > 0 && (
-                        <>
-                          <td className="num" style={{ opacity: 0.4, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0 12px', verticalAlign: 'top', width: 68, borderLeft: '2px solid var(--border)' }}>${formatAmount(r.ytd, 0)}</td>
-                          <td className="num" style={{ opacity: 0.4, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}>${formatAmount(r.ytdTarget, 0)}</td>
-                          <td className="num" style={{ opacity: 0.4, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}>{formatDiff(r.ytdDiff)}</td>
-                        </>
-                      )}
+                      <td className="num" style={{ opacity: 0.4, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0 12px', verticalAlign: 'top', width: 68, borderLeft: '2px solid var(--border)' }}>${formatAmount(r.ytd, 0)}</td>
+                      <td className="num" style={{ opacity: 0.4, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}>${formatAmount(r.ytdTarget, 0)}</td>
+                      <td className="num" style={{ opacity: 0.4, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}>{formatDiff(r.ytdDiff)}</td>
                   </tr>
                 );
               });
@@ -1194,7 +1189,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
           )}
         </div>
         <div className="section-title">Add budget item</div>
-        <div className="row" style={{ flexWrap: 'wrap', alignItems: 'center' }}>
+        <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div className="field" style={{ marginBottom: 0 }}>
             <label>Existing category</label>
             <SearchableSelect options={categories.map((c) => ({ value: c.id, label: c.name }))}
@@ -1202,7 +1197,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
               onChange={(v) => { setNewCatId(v === '' ? '' : Number(v)); if (v !== '') setNewCatName(''); }}
               placeholder="Select..." />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', padding: '0 0.25rem', opacity: 0.4, fontSize: '0.8rem' }}>or</div>
+          <div style={{ display: 'flex', alignItems: 'center', padding: '0 0.25rem', opacity: 0.4, fontSize: '0.8rem', marginBottom: '0.65rem' }}>or</div>
           <div className="field" style={{ marginBottom: 0 }}>
             <label>New category name</label>
             <input
@@ -1213,7 +1208,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
             />
           </div>
           {newCatName.trim() && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem', cursor: 'pointer', whiteSpace: 'nowrap', marginBottom: '0.65rem' }}>
               <input type="checkbox" checked={newCatIsIncome} onChange={(e) => setNewCatIsIncome(e.target.checked)} />
               Income
             </label>
@@ -1224,6 +1219,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
               onKeyDown={(e) => e.key === 'Enter' && addBudgetItem()} />
           </div>
           <button className="btn btn-primary" onClick={addBudgetItem}
+            style={{ marginBottom: '0.65rem' }}
             disabled={!newTarget || (!newCatId && !newCatName.trim())}>
             Add
           </button>
