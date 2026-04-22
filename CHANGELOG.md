@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.3.0](https://github.com/Kll7Ordin/kestl/compare/v2.2.1...v2.3.0) (2026-04-22)
+
+
+### Features
+
+* pick source month when copying budget, fix within-batch transaction dedup ([92fe296](https://github.com/Kll7Ordin/kestl/commit/92fe296832cb50440e8c5893fcec036e05d3cf4b))
+
+
+### Bug Fixes
+
+* atomic config write to prevent splash-on-startup, exclude pre-opening transactions from savings bucket balance ([fec0f9a](https://github.com/Kll7Ordin/kestl/commit/fec0f9a79330a645d907a71ac6ea088a3bf340cf))
+
 ## [2.2.1](https://github.com/Kll7Ordin/kestl/compare/v2.2.0...v2.2.1) (2026-04-22)
 
 
