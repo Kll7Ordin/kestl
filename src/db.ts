@@ -603,21 +603,6 @@ export async function startupCleanup(): Promise<number> {
   }
 
 
-  // 10. One-time: delete Recurring-instrument transactions except kept categories
-  if (!data.completedMigrations) data.completedMigrations = [];
-  if (!data.completedMigrations.includes('purgeRecurringInstrumentTxns')) {
-    const keepNames = new Set(['Spotify Kathy', 'James RRSP Savings Transfer', 'James RRSP Employer Contributions']);
-    const keepCatIds = new Set(data.categories.filter((c) => keepNames.has(c.name)).map((c) => c.id));
-    const before = data.transactions.length;
-    data.transactions = data.transactions.filter(
-      (t) => t.instrument !== 'Recurring' || (t.categoryId != null && keepCatIds.has(t.categoryId))
-    );
-    data.transactionSplits = data.transactionSplits.filter(
-      (s) => data.transactions.some((t) => t.id === s.transactionId)
-    );
-    fixed += before - data.transactions.length;
-    data.completedMigrations.push('purgeRecurringInstrumentTxns');
-  }
 
   // 10a-pre. One-time: rename legacy instrument names to new canonical names
   if (!data.completedMigrations.includes('normalizeInstrumentNames')) {
@@ -637,25 +622,6 @@ export async function startupCleanup(): Promise<number> {
     fixed++;
   }
 
-  // 10b. One-time: delete recurring templates and their transactions, keeping 3 categories
-  if (!data.completedMigrations.includes('purgeRecurringTemplates')) {
-    const keepNames = new Set(['Spotify Kathy', 'James RRSP Savings Transfer', 'James RRSP Employer Contributions']);
-    const keepCatIds = new Set(data.categories.filter((c) => keepNames.has(c.name)).map((c) => c.id));
-    // Delete templates not in kept categories
-    data.recurringTemplates = data.recurringTemplates.filter(
-      (t) => t.categoryId != null && keepCatIds.has(t.categoryId)
-    );
-    // Delete all Recurring-instrument transactions not in kept categories
-    const beforeT = data.transactions.length;
-    data.transactions = data.transactions.filter(
-      (t) => t.instrument !== 'Recurring' || (t.categoryId != null && keepCatIds.has(t.categoryId))
-    );
-    data.transactionSplits = data.transactionSplits.filter(
-      (s) => data.transactions.some((t) => t.id === s.transactionId)
-    );
-    fixed += beforeT - data.transactions.length;
-    data.completedMigrations.push('purgeRecurringTemplates');
-  }
 
   // 11. One-time: apply all existing split rules to matching transactions
   if (!data.completedMigrations.includes('applySplitRules')) {
