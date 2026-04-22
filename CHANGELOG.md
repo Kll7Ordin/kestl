@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.1](https://github.com/Kll7Ordin/kestl/compare/v2.3.0...v2.3.1) (2026-04-22)
+
+
+### Bug Fixes
+
+* remove unused prevMonths function (broke CI build) ([56c6a1c](https://github.com/Kll7Ordin/kestl/commit/56c6a1c5e17664f143114f174461679e18da6323))
+
 ## [2.3.0](https://github.com/Kll7Ordin/kestl/compare/v2.2.1...v2.3.0) (2026-04-22)
 
 
