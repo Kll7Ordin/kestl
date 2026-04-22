@@ -50,9 +50,8 @@ export function getBucketBalance(bucketId: number): number {
   const { savingsEntries, categories, transactions, transactionSplits } = getData();
 
   // All manual/scheduled entries always count toward the balance
-  const entryBalance = savingsEntries
-    .filter((e) => e.bucketId === bucketId)
-    .reduce((sum, e) => sum + e.amount, 0);
+  const bucketEntries = savingsEntries.filter((e) => e.bucketId === bucketId);
+  const entryBalance = bucketEntries.reduce((sum, e) => sum + e.amount, 0);
 
   // Transaction-based contributions: categories linked to this bucket
   const linkedCatIds = new Set(
@@ -60,6 +59,13 @@ export function getBucketBalance(bucketId: number): number {
   );
 
   if (linkedCatIds.size === 0) return entryBalance;
+
+  // Only count transactions on or after the bucket's opening date (earliest entry).
+  // Transactions pre-dating the opening balance are historical and should not
+  // affect the balance — the opening balance already accounts for that period.
+  const openDate = bucketEntries.length > 0
+    ? bucketEntries.reduce((min, e) => e.entryDate < min ? e.entryDate : min, bucketEntries[0].entryDate)
+    : null;
 
   const splitsByTxn = new Map<number, typeof transactionSplits>();
   for (const s of transactionSplits) {
@@ -71,6 +77,7 @@ export function getBucketBalance(bucketId: number): number {
   let txnBalance = 0;
   for (const t of transactions) {
     if (t.ignoreInBudget) continue;
+    if (openDate && t.txnDate < openDate) continue;
     const splits = splitsByTxn.get(t.id);
     if (splits && splits.length > 0) {
       for (const s of splits) {

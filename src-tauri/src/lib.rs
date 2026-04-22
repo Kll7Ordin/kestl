@@ -30,7 +30,12 @@ fn write_config(file_path: &str) {
     let dir = config_dir();
     fs::create_dir_all(&dir).ok();
     let config = serde_json::json!({ "last_file": file_path });
-    fs::write(config_file(), serde_json::to_string_pretty(&config).unwrap()).ok();
+    let content = serde_json::to_string_pretty(&config).unwrap();
+    let target = config_file();
+    let tmp = target.with_extension("tmp");
+    if fs::write(&tmp, &content).is_ok() {
+        fs::rename(&tmp, &target).ok();
+    }
 }
 
 #[tauri::command]
