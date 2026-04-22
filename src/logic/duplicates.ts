@@ -29,7 +29,12 @@ export interface DuplicateResult {
 }
 
 /**
- * Duplicate detection:
+ * Duplicate detection — only checks incoming transactions against what is already
+ * in the database. Two identical rows within the same incoming CSV are never
+ * considered duplicates of each other (e.g. two standing transfers of the same
+ * amount on the same day are both real transactions).
+ *
+ * Checks against existing transactions:
  * 1. Exact: same date + descriptor + amount (re-import of same file)
  * 2. SourceRef: same date + sourceRef + amount (PayPal linking changes descriptors)
  * 3. Pending→Captured: same amount + instrument from bank_csv, dates within 5 days.
@@ -100,11 +105,6 @@ export function detectDuplicates(incoming: Omit<Transaction, 'id'>[]): Duplicate
   const duplicates: Omit<Transaction, 'id'>[] = [];
   const unique: Omit<Transaction, 'id'>[] = [];
 
-  // Track accepted incoming entries for within-batch dedup (same ±5 day window)
-  const incomingCardEntries: { dateMs: number; amount: number; instrument: string; desc: string }[] = [];
-  // Track accepted incoming descriptors by date|amount for within-batch prefix dedup
-  const incomingDateAmountToDescs = new Map<string, string[]>();
-
   for (const txn of incoming) {
     const txnDedupDate = txn.originalTxnDate ?? txn.txnDate;
     const descKey = `${txnDedupDate}|${normalize(txn.descriptor)}|${txn.amount}`;
@@ -112,45 +112,18 @@ export function detectDuplicates(incoming: Omit<Transaction, 'id'>[]): Duplicate
 
     const incomingNorm = normalize(txn.descriptor);
     const existingDescs = dateAmountToDescs.get(`${txnDedupDate}|${txn.amount}`) ?? [];
-    const batchDescs = incomingDateAmountToDescs.get(`${txnDedupDate}|${txn.amount}`) ?? [];
-    const isPrefixDup = [...existingDescs, ...batchDescs]
+    const isPrefixDup = existingDescs
       .some((d) => d.length >= 8 && (d.startsWith(incomingNorm) || incomingNorm.startsWith(d)));
-
-    const txnMs = dateToMs(txn.txnDate);
-    const txnInst = normalizeInstrument(txn.instrument ?? '');
-
-    const txnDesc = normalize(txn.descriptor);
-    const isInBatchDup =
-      txn.source === 'bank_csv' &&
-      txn.instrument &&
-      incomingCardEntries.some((e) => {
-        if (e.amount !== txn.amount || e.instrument !== txnInst) return false;
-        if (Math.abs(e.dateMs - txnMs) > 5 * DAY_MS) return false;
-        const minLen = Math.min(txnDesc.length, e.desc.length);
-        return minLen >= 6 && txnDesc.slice(0, 6) === e.desc.slice(0, 6);
-      });
 
     if (
       descKeys.has(descKey) ||
       sourceKeys.has(srcKey) ||
       isPendingCaptureDup(txn) ||
-      isPrefixDup ||
-      isInBatchDup
+      isPrefixDup
     ) {
       duplicates.push(txn);
     } else {
       unique.push(txn);
-      // Add to in-memory sets so duplicates within the same incoming batch are also caught
-      descKeys.add(descKey);
-      if (txn.sourceRef) sourceKeys.add(srcKey);
-      if (txn.source === 'bank_csv' && txn.instrument) {
-        existingCardEntries.push({ dateMs: txnMs, amount: txn.amount, instrument: txnInst, desc: txnDesc });
-        incomingCardEntries.push({ dateMs: txnMs, amount: txn.amount, instrument: txnInst, desc: txnDesc });
-        const batchKey = `${txnDedupDate}|${txn.amount}`;
-        const batchArr = incomingDateAmountToDescs.get(batchKey) ?? [];
-        batchArr.push(incomingNorm);
-        incomingDateAmountToDescs.set(batchKey, batchArr);
-      }
     }
   }
 

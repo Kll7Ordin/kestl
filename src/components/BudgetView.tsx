@@ -244,7 +244,8 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
 
   const [barCapInfo, setBarCapInfo] = useState({ overflow: 600, catWidth: 400 });
   const [showPickExperimental, setShowPickExperimental] = useState(false);
-  const [confirmOverwrite, setConfirmOverwrite] = useState<{ type: 'lastMonth' | 'experimental'; expId?: number } | null>(null);
+  const [showPickMonth, setShowPickMonth] = useState(false);
+  const [confirmOverwrite, setConfirmOverwrite] = useState<{ type: 'pickMonth' | 'experimental'; sourceMonth?: string; expId?: number } | null>(null);
   const [experimentalBudgets, setExperimentalBudgets] = useState<ExperimentalBudget[]>([]);
   const [totalBudgetRows, setTotalBudgetRows] = useState(0);
 
@@ -568,23 +569,14 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
     setEditPastMonths(false);
   }
 
-  async function copyFromLastMonth() {
+  async function copyFromMonth(sourceMonth: string) {
     const d = getData();
-    const candidates = prevMonths(month, 12);
-    let prevBudgets: typeof d.budgets = [];
-    let sourceMonth = '';
-    for (const m of candidates) {
-      const b = d.budgets.filter((x) => x.month === m);
-      if (b.length > 0) { prevBudgets = b; sourceMonth = m; break; }
-    }
+    const prevBudgets = d.budgets.filter((x) => x.month === sourceMonth);
     for (const b of prevBudgets) await upsertBudget(month, b.categoryId, b.targetAmount, b.groupId);
-    if (prevBudgets.length > 0) {
-      const label = sourceMonth ? new Date(sourceMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 'previous month';
-      alert(`Copied ${prevBudgets.length} budget items from ${label}.`);
-    } else {
-      alert('No budget data found in previous 12 months to copy from.');
-    }
+    const label = new Date(sourceMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    alert(`Copied ${prevBudgets.length} budget items from ${label}.`);
     setConfirmOverwrite(null);
+    setShowPickMonth(false);
   }
 
   async function copyFromExperimental(expId: number) {
@@ -598,15 +590,18 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
     setShowPickExperimental(false);
   }
 
-  function requestCopy(type: 'lastMonth' | 'experimental', expId?: number) {
+  function requestCopy(type: 'pickMonth' | 'experimental', expId?: number) {
+    if (type === 'pickMonth') {
+      setShowPickMonth(true);
+      return;
+    }
     if (expenseRows.length > 0) {
       setConfirmOverwrite({ type, expId });
       if (type === 'experimental' && expId == null) {
         setShowPickExperimental(true);
       }
     } else {
-      if (type === 'lastMonth') copyFromLastMonth();
-      else if (expId != null) copyFromExperimental(expId);
+      if (expId != null) copyFromExperimental(expId);
       else setShowPickExperimental(true);
     }
   }
@@ -811,7 +806,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
       <div className="card">
         {expenseRows.length === 0 && (
           <div style={{ marginBottom: '1rem', display: 'flex', gap: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" onClick={() => requestCopy('lastMonth')}>Copy budget from last month</button>
+            <button className="btn btn-primary" onClick={() => requestCopy('pickMonth')}>Copy budget from a different month</button>
             <button className="btn btn-ghost" onClick={() => requestCopy('experimental')}>Copy from Budget Sandbox</button>
           </div>
         )}
@@ -1231,7 +1226,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
         <div className="card" style={{ textAlign: 'center' }}>
           <div style={{ fontSize: '0.82rem', color: 'var(--text-3)', marginBottom: '0.5rem' }}>Replace this month's budget</div>
           <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-            <button className="btn btn-ghost btn-sm" onClick={() => requestCopy('lastMonth')}>Copy budget from last month</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => requestCopy('pickMonth')}>Copy budget from a different month</button>
             <button className="btn btn-ghost btn-sm" onClick={() => requestCopy('experimental')}>Copy from Budget Sandbox</button>
           </div>
         </div>
@@ -1249,6 +1244,42 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
           {onNavigateToTransactions && <span style={{ fontSize: '0.8rem', opacity: 0.5, marginLeft: 'auto' }}>View in Txns →</span>}
         </div>
       )}
+
+      {/* Month picker modal */}
+      {showPickMonth && (() => {
+        const availableMonths = [...new Set(getData().budgets.map((b) => b.month))]
+          .filter((m) => m !== month)
+          .sort((a, b) => b.localeCompare(a));
+        return (
+          <div className="modal-overlay">
+            <div className="modal" style={{ maxWidth: 380 }}>
+              <h3 style={{ marginTop: 0 }}>Copy budget from…</h3>
+              {availableMonths.length === 0 ? (
+                <p style={{ color: 'var(--text-3)' }}>No other months with budget data found.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginBottom: '1rem', maxHeight: 320, overflowY: 'auto' }}>
+                  {availableMonths.map((m) => (
+                    <button key={m} className="btn btn-ghost" style={{ textAlign: 'left', justifyContent: 'flex-start' }}
+                      onClick={() => {
+                        setShowPickMonth(false);
+                        if (expenseRows.length > 0) {
+                          setConfirmOverwrite({ type: 'pickMonth', sourceMonth: m });
+                        } else {
+                          copyFromMonth(m);
+                        }
+                      }}>
+                      {new Date(m + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="modal-actions">
+                <button className="btn btn-ghost" onClick={() => setShowPickMonth(false)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Experimental budget picker modal */}
       {showPickExperimental && (
@@ -1293,7 +1324,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
             <p>This will overwrite all existing budget items for <strong>{month}</strong>. Are you sure?</p>
             <div className="modal-actions">
               <button className="btn btn-primary" onClick={() => {
-                if (confirmOverwrite.type === 'lastMonth') copyFromLastMonth();
+                if (confirmOverwrite.type === 'pickMonth' && confirmOverwrite.sourceMonth) copyFromMonth(confirmOverwrite.sourceMonth);
                 else if (confirmOverwrite.expId != null) copyFromExperimental(confirmOverwrite.expId);
                 else { setConfirmOverwrite(null); setShowPickExperimental(true); }
               }}>
