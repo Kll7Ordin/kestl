@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { flushSync, createPortal } from 'react-dom';
-import { getData, subscribe, upsertBudget, deleteBudget, updateBudgetNote, addBudgetGroup, updateBudgetGroup, deleteBudgetGroup, reorderBudgetsInGroup, addCategory, updateCategoryNote, updateCategoryName, updateCategoryIsIncome, pushUndoSnapshot, getColorThresholds, type ColorThresholds, type Category, type TransactionSplit, type BudgetGroup, type ExperimentalBudget } from '../db';
+import { getData, subscribe, upsertBudget, deleteBudget, updateBudgetNote, addBudgetGroup, updateBudgetGroup, deleteBudgetGroup, reorderBudgetsInGroup, addCategory, updateCategoryNote, updateCategoryName, updateCategoryIsIncome, pushUndoSnapshot, getColorThresholds, copyBudgetToMonths, type ColorThresholds, type Category, type TransactionSplit, type BudgetGroup, type ExperimentalBudget } from '../db';
 import { ImportBudgetCard } from './ImportBudgetCard';
 import { SearchableSelect } from './SearchableSelect';
 import { formatAmount } from '../utils/format';
@@ -558,11 +558,10 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   }
 
   async function copyFromMonth(sourceMonth: string) {
-    const d = getData();
-    const prevBudgets = d.budgets.filter((x) => x.month === sourceMonth);
-    for (const b of prevBudgets) await upsertBudget(month, b.categoryId, b.targetAmount, b.groupId);
+    await copyBudgetToMonths(sourceMonth, [month]);
+    const sourceCount = getData().budgets.filter((b) => b.month === month).length;
     const label = new Date(sourceMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-    alert(`Copied ${prevBudgets.length} budget items from ${label}.`);
+    alert(`Copied ${sourceCount} budget items from ${label}.`);
     setConfirmOverwrite(null);
     setShowPickMonth(false);
   }

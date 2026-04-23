@@ -34,6 +34,11 @@ export interface DuplicateResult {
  * considered duplicates of each other (e.g. two standing transfers of the same
  * amount on the same day are both real transactions).
  *
+ * Uses count-based matching: if the DB contains N transactions with a given key,
+ * exactly N incoming transactions with that key are treated as duplicates. Any
+ * additional incoming ones are unique. This correctly handles recurring same-day
+ * payments to the same recipient.
+ *
  * Checks against existing transactions:
  * 1. Exact: same date + descriptor + amount (re-import of same file)
  * 2. SourceRef: same date + sourceRef + amount (PayPal linking changes descriptors)
@@ -54,13 +59,23 @@ export function detectDuplicates(incoming: Omit<Transaction, 'id'>[]): Duplicate
   const dedupDate = (t: Pick<Transaction, 'txnDate' | 'originalTxnDate'>) =>
     t.originalTxnDate ?? t.txnDate;
 
-  const descKeys = new Set(
-    transactions.map((t) => `${dedupDate(t)}|${normalize(t.descriptor)}|${t.amount}`),
-  );
+  // Count-based maps: key → number of remaining DB entries available to absorb a match.
+  // When an incoming txn is matched, we decrement the count so that N DB entries only
+  // absorb exactly N incoming ones — not N+1, N+2, etc.
+  const descKeyCounts = new Map<string, number>();
+  for (const t of transactions) {
+    const key = `${dedupDate(t)}|${normalize(t.descriptor)}|${t.amount}`;
+    descKeyCounts.set(key, (descKeyCounts.get(key) ?? 0) + 1);
+  }
 
-  // Prefix-match dedup: handles parser version differences where one import produces
-  // "audible ca" and another produces "audible ca*d11ie7643 Amzn.Com/Billnj" for the same txn.
-  // Build a map of date|amount → normalized descriptors of existing transactions.
+  const sourceKeyCounts = new Map<string, number>();
+  for (const t of transactions.filter((t) => t.sourceRef)) {
+    const key = `${dedupDate(t)}|${t.sourceRef}|${t.amount}`;
+    sourceKeyCounts.set(key, (sourceKeyCounts.get(key) ?? 0) + 1);
+  }
+
+  // Mutable descriptor lists per date|amount for prefix matching.
+  // Splice out matched entries so they can't absorb more than one incoming txn.
   const dateAmountToDescs = new Map<string, string[]>();
   for (const t of transactions) {
     const key = `${dedupDate(t)}|${t.amount}`;
@@ -69,15 +84,8 @@ export function detectDuplicates(incoming: Omit<Transaction, 'id'>[]): Duplicate
     dateAmountToDescs.set(key, arr);
   }
 
-  const sourceKeys = new Set(
-    transactions
-      .filter((t) => t.sourceRef)
-      .map((t) => `${dedupDate(t)}|${t.sourceRef}|${t.amount}`),
-  );
-
-  // For pending→captured: build a list of (dateMs, amount, instrument, normalizedDescriptor)
-  // for existing bank_csv txns. We'll check incoming txns within a ±5 day window.
-  const existingCardEntries = transactions
+  // Mutable card entries for pending→captured matching; splice when consumed.
+  const remainingCardEntries = transactions
     .filter((t) => t.source === 'bank_csv' && t.instrument)
     .map((t) => ({
       dateMs: dateToMs(dedupDate(t)),
@@ -86,20 +94,21 @@ export function detectDuplicates(incoming: Omit<Transaction, 'id'>[]): Duplicate
       desc: normalize(t.descriptor),
     }));
 
-  function isPendingCaptureDup(txn: Omit<Transaction, 'id'>): boolean {
+  function consumePendingCaptureDup(txn: Omit<Transaction, 'id'>): boolean {
     if (txn.source !== 'bank_csv' || !txn.instrument) return false;
     const txnMs = dateToMs(txn.txnDate);
     const txnInst = normalizeInstrument(txn.instrument ?? '');
     const txnDesc = normalize(txn.descriptor);
-    return existingCardEntries.some((e) => {
+    const idx = remainingCardEntries.findIndex((e) => {
       if (e.amount !== txn.amount) return false;
       if (e.instrument !== txnInst) return false;
       if (Math.abs(e.dateMs - txnMs) > 5 * DAY_MS) return false;
-      // Require descriptors to share at least 6 characters from the start to
-      // avoid false positives on same-amount purchases at the same merchant.
       const minLen = Math.min(txnDesc.length, e.desc.length);
       return minLen >= 6 && txnDesc.slice(0, 6) === e.desc.slice(0, 6);
     });
+    if (idx < 0) return false;
+    remainingCardEntries.splice(idx, 1);
+    return true;
   }
 
   const duplicates: Omit<Transaction, 'id'>[] = [];
@@ -109,18 +118,29 @@ export function detectDuplicates(incoming: Omit<Transaction, 'id'>[]): Duplicate
     const txnDedupDate = txn.originalTxnDate ?? txn.txnDate;
     const descKey = `${txnDedupDate}|${normalize(txn.descriptor)}|${txn.amount}`;
     const srcKey = `${txnDedupDate}|${txn.sourceRef}|${txn.amount}`;
-
     const incomingNorm = normalize(txn.descriptor);
-    const existingDescs = dateAmountToDescs.get(`${txnDedupDate}|${txn.amount}`) ?? [];
-    const isPrefixDup = existingDescs
-      .some((d) => d.length >= 8 && (d.startsWith(incomingNorm) || incomingNorm.startsWith(d)));
+    const daKey = `${txnDedupDate}|${txn.amount}`;
+    const existingDescs = dateAmountToDescs.get(daKey) ?? [];
 
-    if (
-      descKeys.has(descKey) ||
-      sourceKeys.has(srcKey) ||
-      isPendingCaptureDup(txn) ||
-      isPrefixDup
-    ) {
+    const descCount = descKeyCounts.get(descKey) ?? 0;
+    const srcCount = sourceKeyCounts.get(srcKey) ?? 0;
+    const prefixIdx = existingDescs.findIndex(
+      (d) => d.length >= 8 && (d.startsWith(incomingNorm) || incomingNorm.startsWith(d)),
+    );
+
+    if (descCount > 0) {
+      descKeyCounts.set(descKey, descCount - 1);
+      // Also remove from dateAmountToDescs so prefix dedup doesn't double-count the same entry
+      const dIdx = existingDescs.indexOf(incomingNorm);
+      if (dIdx >= 0) existingDescs.splice(dIdx, 1);
+      duplicates.push(txn);
+    } else if (srcCount > 0) {
+      sourceKeyCounts.set(srcKey, srcCount - 1);
+      duplicates.push(txn);
+    } else if (consumePendingCaptureDup(txn)) {
+      duplicates.push(txn);
+    } else if (prefixIdx >= 0) {
+      existingDescs.splice(prefixIdx, 1);
       duplicates.push(txn);
     } else {
       unique.push(txn);
