@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.2](https://github.com/Kll7Ordin/kestl/compare/v2.3.1...v2.3.2) (2026-04-23)
+
+
+### Bug Fixes
+
+* budget copy now replaces categories, dedup uses count-based matching ([a4b1c07](https://github.com/Kll7Ordin/kestl/commit/a4b1c07073020d63fb385be0679e17c5db9bbcbc))
+
 ## [2.3.1](https://github.com/Kll7Ordin/kestl/compare/v2.3.0...v2.3.1) (2026-04-22)
 
 
