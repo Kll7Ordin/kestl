@@ -10,7 +10,7 @@ import {
   type Transaction,
   type TransactionSplit,
 } from '../db';
-import { bulkCategorizeByDescriptor, bulkApplySplitRule, getGuessScores } from '../logic/categorize';
+import { bulkCategorizeByDescriptor, bulkApplySplitRule, batchGetGuessScores } from '../logic/categorize';
 import { findRefundCandidates, applyRefundToOriginalMonth, type RefundCandidate } from '../logic/refunds';
 import { SplitEditor } from './SplitEditor';
 import { SearchableSelect } from './SearchableSelect';
@@ -76,20 +76,22 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [tooltip, setTooltip] = useState<{ text: string; top: number; left: number; flipUp: boolean } | null>(null);
 
   // History-based suggestions using the 4-tier point system (exact → stripped IDs → fuzzy → keywords).
+  // Only computed for visible transactions; corpus is preprocessed once for all queries.
   const { allSuggestions, historyScoresMap } = useMemo(() => {
+    const uncatVisible = txns.filter((t) => t.categoryId == null && !t.ignoreInBudget);
+    const queries = uncatVisible.map((t) => ({ id: t.id, descriptor: t.descriptor }));
+    const scoresMap = batchGetGuessScores(queries, allTransactions);
     const suggestions = new Map<number, CategorySuggestion>();
-    const scoresMap = new Map<number, Map<number, number>>();
-    for (const t of allTransactions) {
-      if (t.categoryId != null || t.ignoreInBudget) continue;
-      const scores = getGuessScores(t.descriptor, allTransactions);
-      if (scores.size === 0) continue;
-      scoresMap.set(t.id, scores);
+    const catMapLocal = new Map(categories.map((c) => [c.id, c]));
+    for (const t of uncatVisible) {
+      const scores = scoresMap.get(t.id);
+      if (!scores) continue;
       const catId = [...scores.entries()].sort((a, b) => b[1] - a[1])[0][0];
-      const cat = categories.find((c) => c.id === catId);
+      const cat = catMapLocal.get(catId);
       if (cat) suggestions.set(t.id, { txnId: t.id, categoryId: catId, categoryName: cat.name });
     }
     return { allSuggestions: suggestions, historyScoresMap: scoresMap };
-  }, [allTransactions, categories]);
+  }, [txns, allTransactions, categories]);
 
   const showTooltip = useCallback((e: React.MouseEvent<HTMLTableCellElement>) => {
     const cell = e.currentTarget;
@@ -147,6 +149,10 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const catMap = useMemo(() => new Map(categories.map((c) => [c.id!, c.name])), [categories]);
   const catColorMap = useMemo(() => new Map(categories.map((c) => [c.id!, c.color ?? '#888'])), [categories]);
   const categoryOptions = useMemo(() => categories.map((c) => ({ value: c.id, label: c.name })), [categories]);
+  const instrumentOptions = useMemo(() =>
+    [...new Set(allTransactions.map((t) => t.instrument).filter(Boolean))].sort().map((i) => ({ value: i, label: i })),
+    [allTransactions],
+  );
 
   const txns = useMemo(() => {
     const monthStart = `${month}-01`;
@@ -418,7 +424,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
           buttonStyle={{ padding: '0.3rem 0.6rem' }}
         />
         <SearchableSelect
-          options={[...new Set(allTransactions.map((t) => t.instrument).filter(Boolean))].sort().map((i) => ({ value: i, label: i }))}
+          options={instrumentOptions}
           value={instrumentFilter}
           onChange={(v) => setInstrumentFilter(String(v))}
           placeholder="All instruments"

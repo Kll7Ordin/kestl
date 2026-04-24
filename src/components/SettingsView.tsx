@@ -75,6 +75,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
   const categories = data.categories;
   const sq = search.trim().toLowerCase();
   const catMap = useMemo(() => new Map(categories.map((c) => [c.id, c.name])), [categories]);
+  const categoryOptions = useMemo(() => categories.map((c) => ({ value: c.id, label: c.name })), [categories]);
   const rules = useMemo(() => data.categoryRules
     .map((r) => ({ ...r, catName: catMap.get(r.categoryId) ?? '?' }))
     .filter((r) => !sq || r.pattern.includes(sq) || r.catName.toLowerCase().includes(sq)),
@@ -1174,9 +1175,9 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                 </thead>
                 <tbody>
                   {(() => {
-                    const allRules = data.categoryRules;
+                    const ruleOrderMap = new Map(data.categoryRules.map((ar, i) => [ar.id, i + 1]));
                     return rules.map((r) => {
-                      const orderNum = allRules.findIndex((ar) => ar.id === r.id) + 1;
+                      const orderNum = ruleOrderMap.get(r.id) ?? 0;
                       return (
                         <tr
                           key={r.id}
@@ -1230,7 +1231,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                 <div className="field" style={{ flex: '2 1 160px', marginBottom: 0 }}>
                   <label>Category</label>
                   <SearchableSelect
-                    options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                    options={categoryOptions}
                     value={newRuleCat}
                     onChange={(v) => setNewRuleCat(v === '' ? '' : Number(v))}
                     placeholder="Select..."
@@ -1274,7 +1275,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                   <div key={i} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
                     <div style={{ flex: '2 1 140px' }}>
                       <SearchableSelect
-                        options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                        options={categoryOptions}
                         value={s.categoryId}
                         onChange={(v) => setNewRuleSplits((prev) => prev.map((x, j) => j === i ? { ...x, categoryId: v === '' ? '' : Number(v) } : x))}
                         placeholder="Category"
@@ -1332,7 +1333,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                     <td><input type="number" value={editTmplAmount} onChange={(e) => setEditTmplAmount(e.target.value)} style={{ width: 72, fontSize: '0.85rem' }} /></td>
                     <td>
                       <SearchableSelect
-                        options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                        options={categoryOptions}
                         value={editTmplCategory}
                         onChange={(v) => setEditTmplCategory(v === '' ? '' : Number(v))}
                         placeholder="None"
@@ -1385,7 +1386,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
           <div className="field">
             <label>Category</label>
             <SearchableSelect
-              options={categories.map((c) => ({ value: c.id, label: c.name }))}
+              options={categoryOptions}
               value={tmplCategory}
               onChange={(v) => setTmplCategory(v === '' ? '' : Number(v))}
               placeholder="None"
@@ -1845,7 +1846,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                   <div key={i} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.4rem', alignItems: 'center' }}>
                     <div style={{ flex: 1 }}>
                       <SearchableSelect
-                        options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                        options={categoryOptions}
                         value={s.categoryId}
                         onChange={(v) => setEditSplits((prev) => prev.map((x, j) => j === i ? { ...x, categoryId: v === '' ? '' : Number(v) } : x))}
                         placeholder="Category"
@@ -1872,7 +1873,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
               <div className="field">
                 <label>Category</label>
                 <SearchableSelect
-                  options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                  options={categoryOptions}
                   value={editCatId}
                   onChange={(v) => setEditCatId(v === '' ? '' : Number(v))}
                   placeholder="Select category"

@@ -93,6 +93,54 @@ export function getGuessScores(descriptor: string, transactions: Transaction[]):
   return computeGuessScores(descriptor, transactions);
 }
 
+interface CorpusEntry {
+  categoryId: number;
+  norm: string;
+  stripped: string;
+  words: string[];
+}
+
+/**
+ * Batch variant: preprocess the corpus once, then score multiple descriptors against it.
+ * Use this when computing suggestions for many transactions at once to avoid redundant
+ * normalize/stripIds work on the corpus for every query descriptor.
+ */
+export function batchGetGuessScores(
+  queries: { id: number; descriptor: string }[],
+  transactions: Transaction[],
+): Map<number, Map<number, number>> {
+  const corpus: CorpusEntry[] = [];
+  for (const t of transactions) {
+    if (t.categoryId == null || t.ignoreInBudget) continue;
+    const stripped = stripIds(t.descriptor);
+    corpus.push({
+      categoryId: t.categoryId,
+      norm: normalize(t.descriptor),
+      stripped,
+      words: stripped.split(/\s+/).filter((w) => w.length >= 3 && !NOISE_WORDS.has(w)),
+    });
+  }
+
+  const result = new Map<number, Map<number, number>>();
+  for (const { id, descriptor } of queries) {
+    const norm = normalize(descriptor);
+    const stripped = stripIds(descriptor);
+    const words = stripped.split(/\s+/).filter((w) => w.length >= 3 && !NOISE_WORDS.has(w));
+    const scores = new Map<number, number>();
+    for (const c of corpus) {
+      const add = (pts: number) => scores.set(c.categoryId, (scores.get(c.categoryId) ?? 0) + pts);
+      if (c.norm === norm) { add(40); continue; }
+      if (c.stripped === stripped && stripped.length > 2) { add(25); continue; }
+      const sim = diceSimilarity(norm, c.norm);
+      if (sim >= 0.6) { add(10); continue; }
+      const shared = words.filter((w) => c.words.includes(w)).length;
+      if (shared > 0) add(shared);
+    }
+    if (scores.size > 0) result.set(id, scores);
+  }
+  return result;
+}
+
 export interface SplitAction {
   txnIndex: number;
   splits: Array<{ categoryId: number; amount: number }>;
