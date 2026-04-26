@@ -47,6 +47,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const categories = appData.categories;
   const allTransactions = appData.transactions;
   const allSplits = appData.transactionSplits;
+  const budgets = appData.budgets;
 
   const [monthFilter, setMonthFilter] = useState<string | 'all'>(currentMonth());
   const month = monthFilter === 'all' ? currentMonth() : monthFilter;
@@ -74,24 +75,6 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [tooltip, setTooltip] = useState<{ text: string; top: number; left: number; flipUp: boolean } | null>(null);
-
-  // History-based suggestions using the 4-tier point system (exact → stripped IDs → fuzzy → keywords).
-  // Only computed for visible transactions; corpus is preprocessed once for all queries.
-  const { allSuggestions, historyScoresMap } = useMemo(() => {
-    const uncatVisible = txns.filter((t) => t.categoryId == null && !t.ignoreInBudget);
-    const queries = uncatVisible.map((t) => ({ id: t.id, descriptor: t.descriptor }));
-    const scoresMap = batchGetGuessScores(queries, allTransactions);
-    const suggestions = new Map<number, CategorySuggestion>();
-    const catMapLocal = new Map(categories.map((c) => [c.id, c]));
-    for (const t of uncatVisible) {
-      const scores = scoresMap.get(t.id);
-      if (!scores) continue;
-      const catId = [...scores.entries()].sort((a, b) => b[1] - a[1])[0][0];
-      const cat = catMapLocal.get(catId);
-      if (cat) suggestions.set(t.id, { txnId: t.id, categoryId: catId, categoryName: cat.name });
-    }
-    return { allSuggestions: suggestions, historyScoresMap: scoresMap };
-  }, [txns, allTransactions, categories]);
 
   const showTooltip = useCallback((e: React.MouseEvent<HTMLTableCellElement>) => {
     const cell = e.currentTarget;
@@ -175,9 +158,8 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     });
     if (instrumentFilter !== '') result = result.filter((t) => t.instrument === instrumentFilter);
     if (offBudgetFilter) {
-      const d = getData();
-      const budgetedCatIds = new Set(d.budgets.filter((b) => b.month === month).map((b) => b.categoryId));
-      const incomeCatIds = new Set(d.categories.filter((c) => c.isIncome).map((c) => c.id));
+      const budgetedCatIds = new Set(budgets.filter((b) => b.month === month).map((b) => b.categoryId));
+      const incomeCatIds = new Set(categories.filter((c) => c.isIncome).map((c) => c.id));
       result = result.filter((t) => {
         const splits = splitsMap.get(t.id);
         if (splits && splits.length > 0) return splits.some((s) => !budgetedCatIds.has(s.categoryId) && !incomeCatIds.has(s.categoryId));
@@ -197,7 +179,27 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       });
     }
     return result;
-  }, [allTransactions, monthFilter, month, catFilter, categoryFilter, instrumentFilter, offBudgetFilter, search, splitsMap, catMap]);
+  }, [allTransactions, monthFilter, month, catFilter, categoryFilter, instrumentFilter, offBudgetFilter, search, splitsMap, catMap, budgets]);
+
+  // Suggestions scored against all uncategorized transactions — not filtered by visible txns,
+  // so month/search filter changes don't retrigger batchGetGuessScores.
+  const { allSuggestions, historyScoresMap } = useMemo(() => {
+    const uncatAll = allTransactions.filter((t) => t.categoryId == null && !t.ignoreInBudget);
+    const queries = uncatAll.map((t) => ({ id: t.id, descriptor: t.descriptor }));
+    const scoresMap = batchGetGuessScores(queries, allTransactions);
+    const suggestions = new Map<number, CategorySuggestion>();
+    const catMapLocal = new Map(categories.map((c) => [c.id, c]));
+    for (const t of uncatAll) {
+      const scores = scoresMap.get(t.id);
+      if (!scores) continue;
+      const sorted = [...scores.entries()].sort((a, b) => b[1] - a[1]);
+      if (!sorted.length) continue;
+      const [catId] = sorted[0];
+      const cat = catMapLocal.get(catId);
+      if (cat) suggestions.set(t.id, { txnId: t.id, categoryId: catId, categoryName: cat.name });
+    }
+    return { allSuggestions: suggestions, historyScoresMap: scoresMap };
+  }, [allTransactions, categories]);
 
   const uncatCount = useMemo(() => allTransactions.filter((t) => {
     const splits = splitsMap.get(t.id);

@@ -76,10 +76,12 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
   const sq = search.trim().toLowerCase();
   const catMap = useMemo(() => new Map(categories.map((c) => [c.id, c.name])), [categories]);
   const categoryOptions = useMemo(() => categories.map((c) => ({ value: c.id, label: c.name })), [categories]);
-  const rules = useMemo(() => data.categoryRules
-    .map((r) => ({ ...r, catName: catMap.get(r.categoryId) ?? '?' }))
-    .filter((r) => !sq || r.pattern.includes(sq) || r.catName.toLowerCase().includes(sq)),
-  [data.categoryRules, catMap, sq]);
+  const rules = useMemo(() => {
+    const orderMap = new Map(data.categoryRules.map((r, i) => [r.id, i + 1]));
+    return data.categoryRules
+      .map((r) => ({ ...r, catName: catMap.get(r.categoryId) ?? '?', orderNum: orderMap.get(r.id) ?? 0 }))
+      .filter((r) => !sq || r.pattern.includes(sq) || r.catName.toLowerCase().includes(sq));
+  }, [data.categoryRules, catMap, sq]);
   const templates = useMemo(() => data.recurringTemplates
     .filter((t) => !sq || t.descriptor.toLowerCase().includes(sq) || (t.categoryId && (catMap.get(t.categoryId) ?? '').toLowerCase().includes(sq))),
   [data.recurringTemplates, catMap, sq]);
@@ -1174,10 +1176,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                   <tr><th style={{ width: 32 }}>#</th><th style={{ width: 20 }}></th><th>Pattern</th><th>Match</th><th>Amount</th><th>Category</th><th></th></tr>
                 </thead>
                 <tbody>
-                  {(() => {
-                    const ruleOrderMap = new Map(data.categoryRules.map((ar, i) => [ar.id, i + 1]));
-                    return rules.map((r) => {
-                      const orderNum = ruleOrderMap.get(r.id) ?? 0;
+                  {rules.map((r) => {
                       return (
                         <tr
                           key={r.id}
@@ -1188,7 +1187,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                           onDrop={(e) => { e.preventDefault(); const draggedId = Number(e.dataTransfer.getData('ruleId')); handleRulesDragEnd(draggedId, r.id); }}
                           style={{ opacity: dragOverRuleId === r.id ? 0.5 : 1, background: dragOverRuleId === r.id ? 'var(--accent-muted)' : undefined }}
                         >
-                          <td style={{ fontSize: '0.72rem', opacity: 0.45, width: 32 }}>{orderNum}</td>
+                          <td style={{ fontSize: '0.72rem', opacity: 0.45, width: 32 }}>{r.orderNum}</td>
                           <td style={{ cursor: 'grab', opacity: 0.4, userSelect: 'none', width: 20 }}>⠿</td>
                           <td style={{ wordBreak: 'break-word', maxWidth: 260 }}>{r.pattern}</td>
                           <td><span className="chip">{r.matchType}</span></td>
@@ -1205,8 +1204,8 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                           </td>
                         </tr>
                       );
-                    });
-                  })()}
+                    })}
+
                   {data.categoryRules.length === 0 && <tr><td colSpan={7} className="empty">No rules</td></tr>}
                 </tbody>
               </table>
