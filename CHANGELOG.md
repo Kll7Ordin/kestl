@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.3.3](https://github.com/Kll7Ordin/kestl/compare/v2.3.2...v2.3.3) (2026-04-26)
+
+
+### Performance Improvements
+
+* reduce suggestion scoring work in TransactionView and SettingsView ([077e711](https://github.com/Kll7Ordin/kestl/commit/077e711e8e03a2d0b522b451b03eb6e9957285f6))
+
 ## [2.3.2](https://github.com/Kll7Ordin/kestl/compare/v2.3.1...v2.3.2) (2026-04-23)
 
 
