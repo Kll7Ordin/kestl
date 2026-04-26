@@ -435,6 +435,12 @@ Your budget is a single JSON file containing all categories, budget targets, tra
 
 ---
 
+## Architecture
+
+Kestl is a [Tauri 2](https://tauri.app) desktop app (Rust shell + React 19 / TypeScript UI) that stores everything in a single local JSON file. There is no backend server, no cloud sync, and no accounts. An optional local [Ollama](https://ollama.com) instance powers AI features. See [`docs/architecture.md`](docs/architecture.md) for a full breakdown of subsystems, data flows, and component relationships.
+
+---
+
 ## Tech stack
 
 | Layer | Library |
