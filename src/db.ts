@@ -216,6 +216,7 @@ export interface AppData {
   experimentalBudgets?: ExperimentalBudget[];
   completedMigrations?: string[];
   colorThresholds?: ColorThresholds;
+  displaySettings?: DisplaySettings;
   mortgage?: MortgageConfig;
   mortgageLedger?: MortgageLedgerEntry[];
 }
@@ -232,6 +233,16 @@ export const DEFAULT_COLOR_THRESHOLDS: ColorThresholds = {
   orangeAbs: 1,
   redPct: 10,
   redAbs: 25,
+};
+
+export interface DisplaySettings {
+  ytdColumnsVisible: boolean;
+  ytdMode: 'ytd' | 'rolling12';
+}
+
+export const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = {
+  ytdColumnsVisible: true,
+  ytdMode: 'ytd',
 };
 
 function emptyData(): AppData {
@@ -645,7 +656,21 @@ export async function startupCleanup(): Promise<number> {
     data.completedMigrations.push('applySplitRules');
   }
 
-  // 12. Backfill category colors for categories that don't have one yet
+  // 12. Normalise bank CSV credit amounts to negative.
+  // New convention: expenses (debits) are positive, income (credits) are negative.
+  // This migration flips any bank_csv credit transaction that was stored with a positive
+  // amount under the old Math.abs()-everything convention.
+  if (!data.completedMigrations.includes('bankCsvCreditsNegative')) {
+    for (const t of data.transactions) {
+      if (t.source === 'bank_csv' && t.ignoreInBudget && t.amount > 0) {
+        t.amount = -t.amount;
+        fixed++;
+      }
+    }
+    data.completedMigrations.push('bankCsvCreditsNegative');
+  }
+
+  // 13. Backfill category colors for categories that don't have one yet
   let colorized = 0;
   for (let i = 0; i < data.categories.length; i++) {
     if (!data.categories[i].color) {
@@ -1149,6 +1174,15 @@ export function getColorThresholds(): ColorThresholds {
 
 export async function setColorThresholds(t: ColorThresholds): Promise<void> {
   data.colorThresholds = t;
+  await persist();
+}
+
+export function getDisplaySettings(): DisplaySettings {
+  return { ...DEFAULT_DISPLAY_SETTINGS, ...data.displaySettings };
+}
+
+export async function updateDisplaySettings(patch: Partial<DisplaySettings>): Promise<void> {
+  data.displaySettings = { ...getDisplaySettings(), ...patch };
   await persist();
 }
 

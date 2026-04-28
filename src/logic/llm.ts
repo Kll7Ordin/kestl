@@ -984,7 +984,7 @@ Each returned object must have these fields:
 - source: string (use 'custom')
 - sourceRef: string (use filename)
 - txnDate: string (YYYY-MM-DD format)
-- amount: number (always positive, use Math.abs())
+- amount: number (positive for debits/expenses, negative for credits/income — see sign convention below)
 - instrument: string (use the provided instrument name)
 - descriptor: string (merchant/description)
 - categoryId: null
@@ -992,13 +992,20 @@ Each returned object must have these fields:
 - ignoreInBudget: boolean (true for credits/income, false for debits/expenses)
 - comment: null
 
+Amount sign convention:
+- Debits (purchases, expenses): store as POSITIVE — amount = Math.abs(rawAmount)
+- Credits (refunds, income, deposits): store as NEGATIVE — amount = -Math.abs(rawAmount)
+- Use the transaction type column (Credit/Debit) as the authoritative source, not the raw CSV sign.
+  Different banks use opposite sign conventions in their CSV files, so always normalise via Math.abs
+  then apply the sign based on type: isCredit ? -Math.abs(raw) : Math.abs(raw)
+- Set ignoreInBudget = true whenever isCredit, false otherwise.
+
 Rules:
 - Always return plain JavaScript (no TypeScript syntax, no imports, no type annotations)
 - Handle CSV with proper quote parsing if needed
 - Skip header rows and empty lines
 - Skip any rows that represent pending, pre-authorized, or provisional transactions (e.g. rows with a status/type column containing "pending", "preauthorized", "pre-authorized", "pre-auth", or similar; or descriptors starting with "pending" or "preauth")
 - Dates must be converted to YYYY-MM-DD. Use the provided parseDate(str) helper — it handles M/D/YYYY, YYYY-MM-DD, DD-Mon-YYYY, YYYYMMDD and other common formats. NEVER use new Date() or Date.parse().
-- amount must always be positive
 - Return ONLY the function, nothing else
 - Do NOT include markdown code fences in your response`;
 
@@ -1037,9 +1044,10 @@ User-reported problem: ${feedback.issue}
 
 Write a corrected parseTransactions(text, filename) function. Remember:
 - Return plain JavaScript only, no TypeScript annotations
-- Amount must always be positive (use Math.abs())
+- Debits: amount = Math.abs(raw), ignoreInBudget = false
+- Credits: amount = -Math.abs(raw), ignoreInBudget = true
+- Use the type column (Credit/Debit) as authoritative — do not rely on raw sign
 - Convert dates to YYYY-MM-DD
-- Set ignoreInBudget to true for credits/deposits, false for debits/purchases
 - instrument should be "${instrument}"`
     : `Generate a parser function for this bank export file.
 
@@ -1053,9 +1061,10 @@ ${sampleLines}
 
 Write the parseTransactions(text, filename) function. Remember:
 - Return plain JavaScript only, no TypeScript annotations
-- Amount must always be positive (use Math.abs())
+- Debits: amount = Math.abs(raw), ignoreInBudget = false
+- Credits: amount = -Math.abs(raw), ignoreInBudget = true
+- Use the type column (Credit/Debit) as authoritative — do not rely on raw sign
 - Convert dates to YYYY-MM-DD
-- Set ignoreInBudget to true for credits/deposits, false for debits/purchases
 - instrument should be "${instrument}"`;
 
   const resp = await fetch(`${settings.ollamaUrl}/api/chat`, {
