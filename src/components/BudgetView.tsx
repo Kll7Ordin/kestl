@@ -781,7 +781,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                 <span className="summary-label">Spent</span>
                 <span className="summary-value" style={{ color: '#3b82f6' }}>${formatAmount(totalSpent, 0)}</span>
                 {spendFromSavingsGroupIds.size > 0 && spentFromSavings > 0 && (
-                  <span style={{ fontSize: '0.65rem', color: 'var(--text-3)', marginTop: '0.1rem' }}>+${formatAmount(spentFromSavings, 0)} savings</span>
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-3)', marginTop: '0.1rem' }}>+${formatAmount(spentFromSavings, 0)} from savings</span>
                 )}
               </div>
               <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: incomeRows.length > 0 ? '1px solid var(--border)' : 'none' }}>
