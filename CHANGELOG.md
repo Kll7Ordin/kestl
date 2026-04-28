@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.4.0](https://github.com/Kll7Ordin/kestl/compare/v2.3.3...v2.4.0) (2026-04-28)
+
+
+### Features
+
+* add rolling-12 YTD mode and fix income accumulation for negative credits ([26c9b92](https://github.com/Kll7Ordin/kestl/commit/26c9b92518403a625d1a28f9105fa6894fd130ef))
+
+
+### Bug Fixes
+
+* detect Scotia chequing format by debit sign, normalise credits to negative ([5bb5004](https://github.com/Kll7Ordin/kestl/commit/5bb50045785efcbb09a9d63a4d8069834071cf7b))
+
+
+### Performance Improvements
+
+* decouple suggestion scoring from visible filter in TransactionView ([4721ea1](https://github.com/Kll7Ordin/kestl/commit/4721ea1e1fac83202170200e9bea224915028815))
+
 ## [2.3.3](https://github.com/Kll7Ordin/kestl/compare/v2.3.2...v2.3.3) (2026-04-26)
 
 
