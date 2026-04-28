@@ -1,5 +1,5 @@
 import { useState, useMemo, useRef, useSyncExternalStore, useEffect } from 'react';
-import { getData, subscribe, CATEGORY_PALETTE } from '../db';
+import { getData, subscribe, getDisplaySettings, updateDisplaySettings, CATEGORY_PALETTE } from '../db';
 import { INCOME_CATEGORY_NAMES } from '../seed';
 import {
   Chart as ChartJS,
@@ -29,6 +29,14 @@ function monthsOfYear(year: number): string[] {
   return Array.from({ length: 12 }, (_, i) =>
     `${year}-${String(i + 1).padStart(2, '0')}`
   );
+}
+
+function rollingTwelveMonths(): string[] {
+  const now = new Date();
+  return Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(now.getFullYear(), now.getMonth() - 12 + i, 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
 }
 
 interface MonthData {
@@ -64,6 +72,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const appData = useSyncExternalStore(subscribe, getData);
   const categories = appData.categories;
+  const ytdMode = getDisplaySettings().ytdMode;
   const navFilterApplied = useRef(false);
 
   // Apply nav filter from external navigation (e.g. clicking chart icon in Budget view)
@@ -89,7 +98,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
 
   const data: MonthData[] = useMemo(() => {
     const { budgets: allBudgets, transactions: allTxns, transactionSplits: allSplits } = appData;
-    const months = monthsOfYear(year);
+    const months = ytdMode === 'rolling12' ? rollingTwelveMonths() : monthsOfYear(year);
 
     const splitsByTxn = new Map<number, typeof allSplits>();
     for (const s of allSplits) {
@@ -142,7 +151,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
             const effectiveDate = s.txnDate ?? t.txnDate;
             if (!effectiveDate.startsWith(m)) continue;
             if (incomeCatIds.has(s.categoryId)) {
-              if (t.ignoreInBudget) income += s.amount;
+              if (t.ignoreInBudget) income += Math.abs(s.amount);
             } else if (budgetedExpenseCatIds.has(s.categoryId)) {
               if (occasionalCatIds.has(s.categoryId)) {
                 if (!t.ignoreInBudget) savings += s.amount;
@@ -154,7 +163,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
         } else if (t.categoryId) {
           if (!t.txnDate.startsWith(m)) continue;
           if (incomeCatIds.has(t.categoryId)) {
-            if (t.ignoreInBudget) income += t.amount;
+            if (t.ignoreInBudget) income += Math.abs(t.amount);
           } else if (budgetedExpenseCatIds.has(t.categoryId)) {
             if (occasionalCatIds.has(t.categoryId)) {
               if (!t.ignoreInBudget) savings += t.amount;
@@ -167,7 +176,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
 
       return { month: m, planned, actual, income, savings };
     });
-  }, [appData, year, scope, selectedCats, selectedGroups]);
+  }, [appData, year, scope, selectedCats, selectedGroups, ytdMode]);
 
   const monthLabels = data.map((d) => {
     const [yr, mo] = d.month.split('-').map(Number);
@@ -208,7 +217,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
     const { budgets: allBudgets, transactions: allTxns, transactionSplits: allSplits, budgetGroups } = appData;
 
     const months = pieScope === 'ytd'
-      ? monthsOfYear(year).filter((m) => m < todayMonth)
+      ? (ytdMode === 'rolling12' ? rollingTwelveMonths().filter((m) => m < todayMonth) : monthsOfYear(year).filter((m) => m < todayMonth))
       : [piePeriod];
     const monthSet = new Set(months);
     if (monthSet.size === 0) return { labels: [] as string[], values: [] as number[], colors: [] as string[] };
@@ -307,7 +316,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
         colors: entries.map(([, v]) => v.color),
       };
     }
-  }, [appData, year, pieScope, piePeriod, pieGrouping, categories, todayMonth]);
+  }, [appData, year, pieScope, piePeriod, pieGrouping, categories, todayMonth, ytdMode]);
 
   // Doughnut slice labels — drawn on slices large enough to fit text
   const DONUT_LABEL_MIN_PCT = 0.05;
@@ -453,10 +462,32 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
     <div>
       <h1 className="view-title">Year View</h1>
 
-      <div className="month-nav">
-        <button className="btn btn-ghost btn-sm" onClick={() => setYear((y) => y - 1)}>&lt;</button>
-        <span style={{ fontWeight: 700 }}>{year}</span>
-        <button className="btn btn-ghost btn-sm" onClick={() => setYear((y) => y + 1)}>&gt;</button>
+      <div className="month-nav" style={{ justifyContent: 'space-between' }}>
+        {ytdMode !== 'rolling12' ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => setYear((y) => y - 1)}>&lt;</button>
+            <span style={{ fontWeight: 700 }}>{year}</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => setYear((y) => y + 1)}>&gt;</button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>
+              {(() => {
+                const months = rollingTwelveMonths();
+                const fmt = (m: string) => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1).toLocaleString('en-CA', { month: 'short', year: 'numeric' }); };
+                return `${fmt(months[0])} – ${fmt(months[11])}`;
+              })()}
+            </span>
+          </div>
+        )}
+        <button
+          className="btn btn-ghost btn-sm"
+          title={ytdMode === 'rolling12' ? 'Switch to year-to-date' : 'Switch to rolling 12 months'}
+          style={{ fontSize: '0.75rem', opacity: 0.65 }}
+          onClick={() => updateDisplaySettings({ ytdMode: ytdMode === 'rolling12' ? 'ytd' : 'rolling12' })}
+        >
+          {ytdMode === 'rolling12' ? '12M' : 'YTD'}
+        </button>
       </div>
 
       {/* ── Spending Trends (line chart) — always visible ── */}
@@ -550,7 +581,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
               </tr>
             </thead>
             <tbody>
-              {data.filter((d) => d.planned > 0 || d.actual > 0 || d.income > 0 || d.savings > 0 || d.month === todayMonth).map((d, i) => {
+              {data.filter((d) => d.planned > 0 && (d.actual > 0 || d.income > 0 || d.savings > 0)).map((d, i) => {
                 const completed = isCompleted(d.month);
                 const v = d.planned - d.actual;
                 const [yr, mo] = d.month.split('-').map(Number);
@@ -576,7 +607,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
 
       <div className="row" style={{ marginBottom: '0.5rem', flexWrap: 'wrap', gap: '0.5rem' }}>
         <div style={{ display: 'flex', gap: '0.25rem' }}>
-          <button className={`btn btn-sm ${pieScope === 'ytd' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setPieScope('ytd')}>YTD</button>
+          <button className={`btn btn-sm ${pieScope === 'ytd' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setPieScope('ytd')}>{ytdMode === 'rolling12' ? '12M' : 'YTD'}</button>
           <button className={`btn btn-sm ${pieScope === 'month' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setPieScope('month')}>Month</button>
         </div>
         {pieScope === 'month' && (

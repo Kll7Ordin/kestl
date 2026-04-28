@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { flushSync, createPortal } from 'react-dom';
-import { getData, subscribe, upsertBudget, deleteBudget, updateBudgetNote, addBudgetGroup, updateBudgetGroup, deleteBudgetGroup, reorderBudgetsInGroup, addCategory, updateCategoryNote, updateCategoryName, updateCategoryIsIncome, pushUndoSnapshot, getColorThresholds, copyBudgetToMonths, type ColorThresholds, type Category, type TransactionSplit, type BudgetGroup, type ExperimentalBudget } from '../db';
+import { getData, subscribe, upsertBudget, deleteBudget, updateBudgetNote, addBudgetGroup, updateBudgetGroup, deleteBudgetGroup, reorderBudgetsInGroup, addCategory, updateCategoryNote, updateCategoryName, updateCategoryIsIncome, pushUndoSnapshot, getColorThresholds, copyBudgetToMonths, getDisplaySettings, updateDisplaySettings, type ColorThresholds, type Category, type TransactionSplit, type BudgetGroup, type ExperimentalBudget } from '../db';
 import { ImportBudgetCard } from './ImportBudgetCard';
 import { SearchableSelect } from './SearchableSelect';
 import { formatAmount } from '../utils/format';
@@ -38,6 +38,7 @@ interface BudgetRow {
   ytdTarget: number;
   ytdDiff: number;
   ytdAvgDiff: number;
+  relevantMonthCount: number;
   isIncome?: boolean;
   groupId?: number | null;
   sortOrder?: number;
@@ -45,7 +46,7 @@ interface BudgetRow {
 
 const _catMap = new Map<number, string>();
 
-function buildRows(month: string, categories: Category[], _budgetGroups: BudgetGroup[]): { rows: BudgetRow[]; priorMonthCount: number; allIncomeReceived: number } {
+function buildRows(month: string, categories: Category[], _budgetGroups: BudgetGroup[], ytdMode: 'ytd' | 'rolling12'): { rows: BudgetRow[]; priorMonthCount: number; allIncomeReceived: number } {
   const d = getData();
   const budgets = d.budgets.filter((b) => b.month === month);
   _catMap.clear();
@@ -56,9 +57,20 @@ function buildRows(month: string, categories: Category[], _budgetGroups: BudgetG
   const monthEnd = `${month}-31`;
 
   const priorMonths: string[] = [];
-  for (let m = 1; m < monthNum; m++) {
-    priorMonths.push(`${yearNum}-${String(m).padStart(2, '0')}`);
+  if (ytdMode === 'rolling12') {
+    for (let i = 12; i >= 1; i--) {
+      const pd = new Date(yearNum, monthNum - 1 - i, 1);
+      priorMonths.push(`${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`);
+    }
+  } else {
+    for (let m = 1; m < monthNum; m++) {
+      priorMonths.push(`${yearNum}-${String(m).padStart(2, '0')}`);
+    }
   }
+
+  // Months that had at least one transaction globally (user was actively tracking)
+  const monthsWithTxns = new Set<string>();
+  for (const t of d.transactions) monthsWithTxns.add(t.txnDate.slice(0, 7));
 
   const splitsByTxn = new Map<number, TransactionSplit[]>();
   for (const s of d.transactionSplits) {
@@ -75,12 +87,15 @@ function buildRows(month: string, categories: Category[], _budgetGroups: BudgetG
           const effectiveDate = s.txnDate ?? t.txnDate;
           if (effectiveDate < rangeStart || effectiveDate > rangeEnd) continue;
           const map = t.ignoreInBudget ? incomeMap : spendMap;
-          map.set(s.categoryId, (map.get(s.categoryId) ?? 0) + s.amount);
+          // Credits may be stored as negative amounts; income is always a positive quantity.
+          const contribution = t.ignoreInBudget ? Math.abs(s.amount) : s.amount;
+          map.set(s.categoryId, (map.get(s.categoryId) ?? 0) + contribution);
         }
       } else if (t.categoryId) {
         if (t.txnDate < rangeStart || t.txnDate > rangeEnd) continue;
         const map = t.ignoreInBudget ? incomeMap : spendMap;
-        map.set(t.categoryId, (map.get(t.categoryId) ?? 0) + t.amount);
+        const contribution = t.ignoreInBudget ? Math.abs(t.amount) : t.amount;
+        map.set(t.categoryId, (map.get(t.categoryId) ?? 0) + contribution);
       }
     }
   }
@@ -103,9 +118,18 @@ function buildRows(month: string, categories: Category[], _budgetGroups: BudgetG
     const ytdGross = ytdSpendMap.get(b.categoryId) ?? 0;
     const ytdCredits = ytdIncomeMap.get(b.categoryId) ?? 0;
     const ytd = isIncome ? (ytdIncomeMap.get(b.categoryId) ?? 0) : ytdGross - ytdCredits;
-    const ytdTarget = b.targetAmount * priorMonths.length;
+
+    // Relevant prior months: this category had a budget AND the month had any transactions
+    const catBudgetByMonth = new Map<string, number>();
+    for (const b2 of d.budgets) {
+      if (b2.categoryId === b.categoryId) catBudgetByMonth.set(b2.month, b2.targetAmount);
+    }
+    const relevantPriorMonths = priorMonths.filter((pm) => monthsWithTxns.has(pm) && catBudgetByMonth.has(pm));
+    const ytdTarget = relevantPriorMonths.reduce((s, pm) => s + (catBudgetByMonth.get(pm) ?? 0), 0);
     const ytdDiff = ytd - ytdTarget;
-    const ytdAvgDiff = priorMonths.length > 0 ? ytdDiff / priorMonths.length : 0;
+    const relevantMonthCount = relevantPriorMonths.length;
+    const ytdAvgDiff = relevantMonthCount > 0 ? ytdDiff / relevantMonthCount : 0;
+
     return {
       categoryId: b.categoryId,
       categoryName: _catMap.get(b.categoryId) ?? '?',
@@ -113,7 +137,7 @@ function buildRows(month: string, categories: Category[], _budgetGroups: BudgetG
       budgetNote: b.note,
       target: b.targetAmount,
       spent: isIncome ? credits : grossSpent - credits,
-      ytd, ytdTarget, ytdDiff, ytdAvgDiff, isIncome,
+      ytd, ytdTarget, ytdDiff, ytdAvgDiff, relevantMonthCount, isIncome,
       groupId: b.groupId ?? null,
       sortOrder: (b as { sortOrder?: number }).sortOrder ?? 0,
     };
@@ -193,6 +217,8 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   const [editGroupNoteText, setEditGroupNoteText] = useState('');
   const [confirmDeleteGroupId, setConfirmDeleteGroupId] = useState<number | null>(null);
   const [colorThresholds, setColorThresholdsState] = useState(() => getColorThresholds());
+  const [ytdColumnsVisible, setYtdColumnsVisible] = useState(() => getDisplaySettings().ytdColumnsVisible);
+  const [ytdMode, setYtdMode] = useState<'ytd' | 'rolling12'>(() => getDisplaySettings().ytdMode);
 
   // Item drag state — uses direct DOM for transforms during drag (no re-renders)
   const _moveRef = useRef<((e: MouseEvent) => void) | null>(null);
@@ -237,7 +263,9 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   const [experimentalBudgets, setExperimentalBudgets] = useState<ExperimentalBudget[]>([]);
   const [totalBudgetRows, setTotalBudgetRows] = useState(0);
 
-  // Keep --bar-max-overflow in sync with the midpoint between Avg and YTD columns
+  // Keep --bar-max-overflow in sync with column positions
+  const ytdColumnsVisibleRef = useRef(ytdColumnsVisible);
+  ytdColumnsVisibleRef.current = ytdColumnsVisible;
   useEffect(() => {
     function measure() {
       const table = budgetTableRef.current;
@@ -245,19 +273,21 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
       const catTh = table.querySelector('th[data-col="category"]') as HTMLElement | null;
       const avgTh = table.querySelector('th[data-col="avg"]') as HTMLElement | null;
       const ytdTh = table.querySelector('th[data-col="ytd"]') as HTMLElement | null;
+      const ytdDiffTh = table.querySelector('th[data-col="ytd-diff"]') as HTMLElement | null;
       if (!catTh) return;
       const catRect = catTh.getBoundingClientRect();
-      // When YTD columns are visible, anchor to gap between Avg and YTD
       let midpoint: number;
-      if (avgTh && ytdTh) {
+      if (!ytdColumnsVisibleRef.current && ytdDiffTh) {
+        // Columns hidden — bar can extend through the empty YTD space
+        midpoint = ytdDiffTh.getBoundingClientRect().right - 4;
+      } else if (avgTh && ytdTh) {
+        // Columns visible — anchor to gap between Avg and YTD
         const avgRect = avgTh.getBoundingClientRect();
         const ytdRect = ytdTh.getBoundingClientRect();
         midpoint = (avgRect.right + ytdRect.left) / 2;
       } else {
-        // No extra columns — allow only a small overflow for the arrow indicator
         midpoint = catRect.right + 32;
       }
-      // Track right end is 10px from cat td right; overflow measured from track right end
       const overflow = Math.max(0, midpoint - catRect.right + 18);
       table.style.setProperty('--bar-max-overflow', `${overflow}px`);
       setBarCapInfo({ overflow, catWidth: catRect.width });
@@ -266,16 +296,19 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
     const ro = new ResizeObserver(measure);
     if (budgetTableRef.current) ro.observe(budgetTableRef.current);
     return () => ro.disconnect();
-  }, [priorMonthCount]);
+  }, [priorMonthCount, ytdColumnsVisible]);
 
   useEffect(() => {
     function refresh() {
       const d = getData();
+      const ds = getDisplaySettings();
       setCategories(d.categories);
       setBudgetGroups(d.budgetGroups ?? []);
       setExperimentalBudgets(d.experimentalBudgets ?? []);
       setTotalBudgetRows(d.budgets.length);
-      const result = buildRows(month, d.categories, d.budgetGroups ?? []);
+      setYtdColumnsVisible(ds.ytdColumnsVisible);
+      setYtdMode(ds.ytdMode);
+      const result = buildRows(month, d.categories, d.budgetGroups ?? [], ds.ytdMode);
       setRows(result.rows);
       setPriorMonthCount(result.priorMonthCount);
       setAllIncomeReceived(result.allIncomeReceived);
@@ -797,7 +830,27 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
             <button className="btn btn-ghost" onClick={() => requestCopy('experimental')}>Copy from Budget Sandbox</button>
           </div>
         )}
-        <div className="section-title" style={{ marginTop: 0 }}>Expenses</div>
+        <div className="section-title" style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span>Expenses</span>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.25rem' }}>
+            <button
+              className="btn btn-ghost btn-sm"
+              title={ytdMode === 'rolling12' ? 'Switch to year-to-date' : 'Switch to rolling 12 months'}
+              style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', opacity: 0.55 }}
+              onClick={() => { const m = ytdMode === 'rolling12' ? 'ytd' : 'rolling12'; setYtdMode(m); updateDisplaySettings({ ytdMode: m }); }}
+            >
+              {ytdMode === 'rolling12' ? '12M' : 'YTD'}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
+              title={ytdColumnsVisible ? 'Hide period columns' : 'Show period columns'}
+              style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', opacity: ytdColumnsVisible ? 0.55 : 0.25 }}
+              onClick={() => { const v = !ytdColumnsVisible; setYtdColumnsVisible(v); updateDisplaySettings({ ytdColumnsVisible: v }); }}
+            >
+              👁
+            </button>
+          </div>
+        </div>
         <table className="data-table budget-table" ref={budgetTableRef}>
           <thead>
             <tr>
@@ -805,9 +858,9 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
               <th data-col="category">Category</th>
               <th className="num" style={{ fontSize: '0.65rem', width: 72, padding: '0.55rem 6px' }}>Target</th>
               <th className="num" data-col="avg" style={{ fontSize: '0.65rem', width: 64, padding: '0.55rem 14px 0.55rem 6px' }}>Avg ±/mo</th>
-              <th className="num" data-col="ytd" style={{ opacity: 0.4, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px 0.55rem 12px', borderLeft: '2px solid var(--border)' }}>YTD</th>
-              <th className="num" data-col="ytd-target" style={{ opacity: 0.4, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}>YTD Tgt</th>
-              <th className="num" style={{ opacity: 0.4, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}>YTD Diff</th>
+              <th className="num" data-col="ytd" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px 0.55rem 12px', borderLeft: ytdColumnsVisible ? '2px solid var(--border)' : 'none' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdMode === 'rolling12' ? '12M' : 'YTD'}</span></th>
+              <th className="num" data-col="ytd-target" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdMode === 'rolling12' ? '12M Tgt' : 'YTD Tgt'}</span></th>
+              <th className="num" data-col="ytd-diff" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdMode === 'rolling12' ? '12M Diff' : 'YTD Diff'}</span></th>
             </tr>
           </thead>
           <tbody ref={tableBodyRef}>
@@ -955,12 +1008,12 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                                   onChange={(e) => setEditNoteText(e.target.value)}
                                   onBlur={() => { updateCategoryNote(r.categoryId, editNoteText); setEditNoteId(null); }}
                                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') { if (e.key === 'Enter') updateCategoryNote(r.categoryId, editNoteText); setEditNoteId(null); } }}
-                                  placeholder="Always..." style={{ fontSize: '0.78rem', width: 140, padding: '1px 4px' }} />
+                                  placeholder="Category description..." style={{ fontSize: '0.78rem', width: 140, padding: '1px 4px' }} />
                               ) : (
-                                <span title={r.note ? `Always: ${r.note}` : 'Add always-on note'}
+                                <span title={r.note ? `Description: ${r.note}` : 'Add category description'}
                                   style={{ cursor: 'pointer', opacity: r.note ? 0.8 : 0.25, fontSize: '0.75rem', flexShrink: 0 }}
                                   onClick={() => { setEditNoteId(r.categoryId); setEditNoteText(r.note ?? ''); }}>
-                                  {r.note ? '📝' : '＋'}
+                                  {r.note ? '🏷' : '＋'}
                                 </span>
                               )}
                               {editBudgetNoteId === r.categoryId ? (
@@ -1061,13 +1114,13 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                         )}
                       </td>
                       {/* Avg ±/mo column */}
-                      <td className="num" style={{ fontSize: '0.8rem', fontWeight: 600, width: 64, padding: '7px 14px 0 6px', verticalAlign: 'top', color: budgetDiffColor(r.ytdAvgDiff, r.ytdTarget / Math.max(priorMonthCount, 1), colorThresholds) }}>
+                      <td className="num" style={{ fontSize: '0.8rem', fontWeight: 600, width: 64, padding: '7px 14px 0 6px', verticalAlign: 'top', color: budgetDiffColor(r.ytdAvgDiff, r.relevantMonthCount > 0 ? r.ytdTarget / r.relevantMonthCount : r.target, colorThresholds) }}>
                         {formatDiff(r.ytdAvgDiff)}
                       </td>
-                      {/* YTD columns — dim */}
-                      <td className="num" style={{ opacity: 0.4, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0 12px', verticalAlign: 'top', width: 68, borderLeft: '2px solid var(--border)' }}>${formatAmount(r.ytd, 0)}</td>
-                      <td className="num" style={{ opacity: 0.4, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}>${formatAmount(r.ytdTarget, 0)}</td>
-                      <td className="num" style={{ opacity: 0.4, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}>{formatDiff(r.ytdDiff)}</td>
+                      {/* Period columns — dim when visible; full opacity when hidden so row stripe background is unaffected */}
+                      <td className="num" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0 12px', verticalAlign: 'top', width: 68, borderLeft: ytdColumnsVisible ? '2px solid var(--border)' : 'none' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>${formatAmount(r.ytd, 0)}</span></td>
+                      <td className="num" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>${formatAmount(r.ytdTarget, 0)}</span></td>
+                      <td className="num" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{formatDiff(r.ytdDiff)}</span></td>
                   </tr>
                 );
               });

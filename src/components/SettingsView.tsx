@@ -32,6 +32,8 @@ import {
   getColorThresholds,
   setColorThresholds,
   DEFAULT_COLOR_THRESHOLDS,
+  getDisplaySettings,
+  updateDisplaySettings,
   type ColorThresholds,
   type RecurringTemplate,
   type Transaction,
@@ -92,6 +94,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
 
   const [pendingEncryptedPath, setPendingEncryptedPath] = useState<string | null>(null);
   const [colorThresholds, setColorThresholdsState] = useState<ColorThresholds>(() => getColorThresholds());
+  const [ytdMode, setYtdModeState] = useState<'ytd' | 'rolling12'>(() => getDisplaySettings().ytdMode);
   const [showCategoriesScreen, setShowCategoriesScreen] = useState(false);
   const [showRulesScreen, setShowRulesScreen] = useState(false);
   const [showParserCreate, setShowParserCreate] = useState(false);
@@ -651,6 +654,31 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
               ☾ Dark
             </button>
           </div>
+        </div>
+      </div>
+
+      <div className="card" style={{ marginBottom: '1rem' }}>
+        <div className="section-title">Budget Period</div>
+        <div className="field">
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              className={`btn btn-sm ${ytdMode === 'ytd' ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => { setYtdModeState('ytd'); updateDisplaySettings({ ytdMode: 'ytd' }); }}
+            >
+              Year-to-date
+            </button>
+            <button
+              className={`btn btn-sm ${ytdMode === 'rolling12' ? 'btn-primary' : 'btn-ghost'}`}
+              onClick={() => { setYtdModeState('rolling12'); updateDisplaySettings({ ytdMode: 'rolling12' }); }}
+            >
+              Rolling 12 months
+            </button>
+          </div>
+          <p style={{ fontSize: '0.8rem', color: 'var(--text-2)', marginTop: '0.3rem', marginBottom: 0 }}>
+            {ytdMode === 'rolling12'
+              ? 'Averages and period totals cover the 12 months prior to the current month.'
+              : 'Averages and period totals cover January through the previous month of the selected year.'}
+          </p>
         </div>
       </div>
 
