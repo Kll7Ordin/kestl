@@ -699,6 +699,38 @@ export async function deleteCategory(id: number): Promise<void> {
   await persist();
 }
 
+/**
+ * Merge one or more source categories into a target category.
+ * All transactions, splits, and rule references pointing to a source are
+ * updated to point to the target instead. Source categories, their budget
+ * entries, and any rules that solely belonged to them are then deleted.
+ */
+export async function mergeCategories(sourceIds: number[], targetId: number): Promise<void> {
+  pushUndoSnapshot();
+  const sourceSet = new Set(sourceIds);
+
+  for (const t of data.transactions) {
+    if (t.categoryId != null && sourceSet.has(t.categoryId)) t.categoryId = targetId;
+  }
+
+  for (const s of data.transactionSplits) {
+    if (sourceSet.has(s.categoryId)) s.categoryId = targetId;
+  }
+
+  for (const r of data.categoryRules) {
+    if (sourceSet.has(r.categoryId)) r.categoryId = targetId;
+    if (r.splits) {
+      for (const s of r.splits) {
+        if (sourceSet.has(s.categoryId)) s.categoryId = targetId;
+      }
+    }
+  }
+
+  data.categories = data.categories.filter((c) => !sourceSet.has(c.id));
+  data.budgets = data.budgets.filter((b) => !sourceSet.has(b.categoryId));
+  await persist();
+}
+
 // --- Category Rules ---
 export async function addCategoryRule(rule: Omit<CategoryRule, 'id'>): Promise<number> {
   const id = nextId();

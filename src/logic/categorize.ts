@@ -28,10 +28,40 @@ const NOISE_WORDS = new Set([
   // Payment types
   'pos','gpos','purchase','payment','debit','credit','transfer','deposit',
   'withdrawal','auto','bill','pre','authorized',
-  // Geographic noise
+  // Province abbreviations
   'bc','ab','on','qc','mb','sk','ns','nb','nl','pe','nt','yt','nu',
+  // Business suffixes
   'canada','canadian','inc','ltd','llc','co','corp','company',
+  // Canadian city names common in transaction descriptors
+  'victoria','vancouver','burnaby','surrey','richmond','kelowna','nanaimo',
+  'abbotsford','toronto','calgary','edmonton','winnipeg','montreal','ottawa',
+  'hamilton','london','halifax','saskatoon','regina','whitehorse','yellowknife',
+  'iqaluit','charlottetown','fredericton','moncton','langley','coquitlam',
+  'delta','chilliwack','kamloops','courtenay','campbell','comox','squamish',
 ]);
+
+/**
+ * Build the set of words that appear in 3 or more distinct categories.
+ * Such words are too generic to be useful for Tier 4 keyword matching and
+ * are excluded dynamically in addition to the static NOISE_WORDS list.
+ */
+function buildHighSpreadWords(transactions: Transaction[]): Set<string> {
+  const wordToCategories = new Map<string, Set<number>>();
+  for (const t of transactions) {
+    if (t.categoryId == null || t.ignoreInBudget) continue;
+    const words = stripIds(t.descriptor).split(/\s+/).filter((w) => w.length >= 3 && !NOISE_WORDS.has(w));
+    for (const w of words) {
+      let cats = wordToCategories.get(w);
+      if (!cats) { cats = new Set(); wordToCategories.set(w, cats); }
+      cats.add(t.categoryId);
+    }
+  }
+  const result = new Set<string>();
+  for (const [word, cats] of wordToCategories) {
+    if (cats.size >= 3) result.add(word);
+  }
+  return result;
+}
 
 // Compute fuzzy similarity (Dice coefficient on trigrams)
 function diceSimilarity(a: string, b: string): number {
@@ -54,9 +84,12 @@ function diceSimilarity(a: string, b: string): number {
  * Cat 4 = shared meaningful keywords (1 pt each)
  */
 function computeGuessScores(descriptor: string, transactions: Transaction[]): Map<number, number> {
+  const highSpread = buildHighSpreadWords(transactions);
+  const isNoise = (w: string) => NOISE_WORDS.has(w) || highSpread.has(w);
+
   const norm = normalize(descriptor);
   const stripped = stripIds(descriptor);
-  const words = stripped.split(/\s+/).filter((w) => w.length >= 3 && !NOISE_WORDS.has(w));
+  const words = stripped.split(/\s+/).filter((w) => w.length >= 3 && !isNoise(w));
 
   const scores = new Map<number, number>();
   const addScore = (catId: number | null, pts: number) => {
@@ -73,7 +106,7 @@ function computeGuessScores(descriptor: string, transactions: Transaction[]): Ma
     if (tStripped === stripped && stripped.length > 2) { addScore(t.categoryId, 25); continue; }
     const sim = diceSimilarity(norm, tNorm);
     if (sim >= 0.6) { addScore(t.categoryId, 10); continue; }
-    const tWords = tStripped.split(/\s+/).filter((w) => w.length >= 3 && !NOISE_WORDS.has(w));
+    const tWords = tStripped.split(/\s+/).filter((w) => w.length >= 3 && !isNoise(w));
     const shared = words.filter((w) => tWords.includes(w)).length;
     if (shared > 0) addScore(t.categoryId, shared);
   }
@@ -109,6 +142,9 @@ export function batchGetGuessScores(
   queries: { id: number; descriptor: string }[],
   transactions: Transaction[],
 ): Map<number, Map<number, number>> {
+  const highSpread = buildHighSpreadWords(transactions);
+  const isNoise = (w: string) => NOISE_WORDS.has(w) || highSpread.has(w);
+
   const corpus: CorpusEntry[] = [];
   for (const t of transactions) {
     if (t.categoryId == null || t.ignoreInBudget) continue;
@@ -117,7 +153,7 @@ export function batchGetGuessScores(
       categoryId: t.categoryId,
       norm: normalize(t.descriptor),
       stripped,
-      words: stripped.split(/\s+/).filter((w) => w.length >= 3 && !NOISE_WORDS.has(w)),
+      words: stripped.split(/\s+/).filter((w) => w.length >= 3 && !isNoise(w)),
     });
   }
 
@@ -125,7 +161,7 @@ export function batchGetGuessScores(
   for (const { id, descriptor } of queries) {
     const norm = normalize(descriptor);
     const stripped = stripIds(descriptor);
-    const words = stripped.split(/\s+/).filter((w) => w.length >= 3 && !NOISE_WORDS.has(w));
+    const words = stripped.split(/\s+/).filter((w) => w.length >= 3 && !isNoise(w));
     const scores = new Map<number, number>();
     for (const c of corpus) {
       const add = (pts: number) => scores.set(c.categoryId, (scores.get(c.categoryId) ?? 0) + pts);

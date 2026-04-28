@@ -748,7 +748,8 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
       {/* Summary bubbles — equal-width sub-cards via shared grid */}
       {(() => {
         const budgetCardCount = totalIncome > 0 ? 3 : 2;
-        const mtdCardCount = 2 + (spendFromSavingsGroupIds.size > 0 ? 1 : 0) + (incomeRows.length > 0 ? 2 : 0);
+        const netMtd = totalReceived - totalSpent;
+        const mtdCardCount = 2 + (incomeRows.length > 0 ? 3 : 0);
         return (
         <div style={{ display: 'grid', gridTemplateColumns: `${budgetCardCount}fr ${mtdCardCount}fr`, gap: '1rem', marginBottom: '1rem' }}>
           {/* Budget */}
@@ -779,13 +780,10 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
               <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
                 <span className="summary-label">Spent</span>
                 <span className="summary-value" style={{ color: '#3b82f6' }}>${formatAmount(totalSpent, 0)}</span>
+                {spendFromSavingsGroupIds.size > 0 && spentFromSavings > 0 && (
+                  <span style={{ fontSize: '0.65rem', color: 'var(--text-3)', marginTop: '0.1rem' }}>+${formatAmount(spentFromSavings, 0)} savings</span>
+                )}
               </div>
-              {spendFromSavingsGroupIds.size > 0 && (
-                <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
-                  <span className="summary-label">From Savings</span>
-                  <span className="summary-value" style={{ color: '#3b82f6' }}>${formatAmount(spentFromSavings, 0)}</span>
-                </div>
-              )}
               <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: incomeRows.length > 0 ? '1px solid var(--border)' : 'none' }}>
                 <span className="summary-label">Remaining</span>
                 <span className="summary-value" style={{ color: '#b45309' }}>${formatAmount(Math.max(0, totalTarget - totalSpent), 0)}</span>
@@ -797,9 +795,17 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                 </div>
               )}
               {incomeRows.length > 0 && (
-                <div className="summary-card" style={{ borderRadius: 0, border: 'none' }}>
+                <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
                   <span className="summary-label">Yet to Receive</span>
                   <span className="summary-value" style={{ color: '#b45309' }}>${formatAmount(yetToReceive, 0)}</span>
+                </div>
+              )}
+              {incomeRows.length > 0 && (
+                <div className="summary-card" style={{ borderRadius: 0, border: 'none' }}>
+                  <span className="summary-label">Net</span>
+                  <span className="summary-value" style={{ color: netMtd >= 0 ? '#16a34a' : '#dc2626' }}>
+                    {netMtd >= 0 ? '+' : '-'}${formatAmount(Math.abs(netMtd), 0)}
+                  </span>
                 </div>
               )}
             </div>

@@ -27,6 +27,7 @@ import {
   enableEncryption,
   changeEncryptionPassword,
   disableEncryption,
+  mergeCategories,
   deleteCustomParser,
   saveCustomParser,
   getColorThresholds,
@@ -129,6 +130,9 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
   }, [parserToOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [newCat, setNewCat] = useState('');
+  const [mergeTargetId, setMergeTargetId] = useState<number | ''>('');
+  const [mergeSourceIds, setMergeSourceIds] = useState<Set<number>>(new Set());
+  const [mergeConfirm, setMergeConfirm] = useState(false);
   const [newPattern, setNewPattern] = useState('');
   const [newMatchType, setNewMatchType] = useState<'exact' | 'contains'>('exact');
   const [newRuleCat, setNewRuleCat] = useState<number | ''>('');
@@ -307,6 +311,16 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
 
   async function handleDeleteCategory(id: number) {
     await deleteCategory(id);
+  }
+
+  async function handleMergeCategories() {
+    if (!mergeTargetId || mergeSourceIds.size === 0) return;
+    const sources = [...mergeSourceIds].filter((id) => id !== mergeTargetId);
+    if (sources.length === 0) return;
+    await mergeCategories(sources, mergeTargetId as number);
+    setMergeSourceIds(new Set());
+    setMergeTargetId('');
+    setMergeConfirm(false);
   }
 
   async function handleAddRule(forceSplit?: boolean) {
@@ -1131,6 +1145,77 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
               <button className="btn btn-primary" style={{ flexShrink: 0 }} onClick={handleAddCategory}>Add</button>
             </div>
           </div>
+
+          {/* Merge Categories */}
+          <div className="card" style={{ marginTop: '1rem' }}>
+            <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '0.4rem' }}>Merge Categories</div>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-3)', marginBottom: '0.75rem' }}>
+              Reassign all transactions from source categories to a target, then delete the sources.
+            </p>
+            <div className="field" style={{ marginBottom: '0.75rem' }}>
+              <label style={{ fontSize: '0.8rem' }}>Merge into (target)</label>
+              <SearchableSelect
+                options={categoryOptions}
+                value={mergeTargetId}
+                onChange={(v) => {
+                  setMergeTargetId(v as number | '');
+                  if (v !== '') setMergeSourceIds((prev) => { const next = new Set(prev); next.delete(v as number); return next; });
+                }}
+                placeholder="Select target category…"
+              />
+            </div>
+            {mergeTargetId !== '' && (
+              <div className="field" style={{ marginBottom: '0.75rem' }}>
+                <label style={{ fontSize: '0.8rem' }}>Sources to merge (select one or more)</label>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', maxHeight: 220, overflowY: 'auto', marginTop: '0.25rem' }}>
+                  {categories.filter((c) => c.id !== mergeTargetId).map((c) => (
+                    <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={mergeSourceIds.has(c.id)}
+                        onChange={(e) => {
+                          setMergeSourceIds((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(c.id); else next.delete(c.id);
+                            return next;
+                          });
+                        }}
+                      />
+                      {c.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+            {mergeTargetId !== '' && mergeSourceIds.size > 0 && (
+              <button className="btn btn-danger btn-sm" onClick={() => setMergeConfirm(true)}>
+                Merge {mergeSourceIds.size} → {catMap.get(mergeTargetId as number) ?? '?'}
+              </button>
+            )}
+          </div>
+
+          {mergeConfirm && mergeTargetId !== '' && mergeSourceIds.size > 0 && createPortal(
+            <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div className="card" style={{ minWidth: 320, maxWidth: 480, padding: '1.5rem', background: 'var(--bg-2)' }}>
+                <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: '0.75rem' }}>Confirm Merge</div>
+                <p style={{ fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                  Merge into: <strong>{catMap.get(mergeTargetId as number)}</strong>
+                </p>
+                <p style={{ fontSize: '0.85rem', marginBottom: '0.75rem' }}>
+                  Sources to delete:{' '}
+                  <strong>{[...mergeSourceIds].map((id) => catMap.get(id) ?? '?').join(', ')}</strong>
+                </p>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-3)', marginBottom: '1rem' }}>
+                  All transactions, splits, and rules from the source categories will be reassigned to the target. Source categories and their budget entries will be permanently deleted.
+                </p>
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button className="btn btn-danger" onClick={handleMergeCategories}>Merge</button>
+                  <button className="btn btn-ghost" onClick={() => setMergeConfirm(false)}>Cancel</button>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )}
         </div>
       )}
 
