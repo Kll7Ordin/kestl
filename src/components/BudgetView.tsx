@@ -750,6 +750,17 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
         const budgetCardCount = totalIncome > 0 ? 3 : 2;
         const netMtd = totalReceived - totalSpent;
         const mtdCardCount = 2 + (incomeRows.length > 0 ? 3 : 0);
+
+        // Pro-rate the monthly target by how far through the month we are.
+        // Past months: fraction = 1. Future months: fraction = 0 (no color).
+        const today = new Date();
+        const todayMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+        const monthFraction = month < todayMonth ? 1
+          : month > todayMonth ? 0
+          : today.getDate() / new Date(y, mon, 0).getDate();
+        const proratedTarget = totalTarget * monthFraction;
+        const spentDiff = totalSpent - proratedTarget;
+        const spentColor = monthFraction === 0 ? 'inherit' : budgetDiffColor(spentDiff, proratedTarget, colorThresholds);
         return (
         <div style={{ display: 'grid', gridTemplateColumns: `${budgetCardCount}fr ${mtdCardCount}fr`, gap: '1rem', marginBottom: '1rem' }}>
           {/* Budget */}
@@ -779,25 +790,25 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
             <div style={{ display: 'grid', gridTemplateColumns: `repeat(${mtdCardCount}, 1fr)`, gap: 0 }}>
               <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
                 <span className="summary-label">Spent</span>
-                <span className="summary-value" style={{ color: '#3b82f6' }}>${formatAmount(totalSpent, 0)}</span>
+                <span className="summary-value" style={{ color: spentColor }}>${formatAmount(totalSpent, 0)}</span>
                 {spendFromSavingsGroupIds.size > 0 && spentFromSavings > 0 && (
                   <span style={{ fontSize: '0.65rem', color: 'var(--text-3)', marginTop: '0.1rem' }}>+${formatAmount(spentFromSavings, 0)} from savings</span>
                 )}
               </div>
               <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: incomeRows.length > 0 ? '1px solid var(--border)' : 'none' }}>
                 <span className="summary-label">Remaining</span>
-                <span className="summary-value" style={{ color: '#b45309' }}>${formatAmount(Math.max(0, totalTarget - totalSpent), 0)}</span>
+                <span className="summary-value">${formatAmount(Math.max(0, totalTarget - totalSpent), 0)}</span>
               </div>
               {incomeRows.length > 0 && (
                 <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
                   <span className="summary-label">Received</span>
-                  <span className="summary-value" style={{ color: '#3b82f6' }}>${formatAmount(totalReceived, 0)}</span>
+                  <span className="summary-value">${formatAmount(totalReceived, 0)}</span>
                 </div>
               )}
               {incomeRows.length > 0 && (
                 <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
                   <span className="summary-label">Yet to Receive</span>
-                  <span className="summary-value" style={{ color: '#b45309' }}>${formatAmount(yetToReceive, 0)}</span>
+                  <span className="summary-value">${formatAmount(yetToReceive, 0)}</span>
                 </div>
               )}
               {incomeRows.length > 0 && (
