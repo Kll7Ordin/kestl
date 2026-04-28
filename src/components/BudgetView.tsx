@@ -767,16 +767,16 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
           <div style={{ background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '0.875rem 0 0.875rem 0', overflow: 'hidden' }}>
             <div style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-3)', marginBottom: '0.6rem', paddingLeft: '0.875rem' }}>Budget</div>
             <div style={{ display: 'grid', gridTemplateColumns: `repeat(${budgetCardCount}, 1fr)`, gap: 0 }}>
-              <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
-                <span className="summary-label">Expenses</span>
-                <span className="summary-value negative">${formatAmount(totalTarget, 0)}</span>
-              </div>
               {totalIncome > 0 && (
                 <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
                   <span className="summary-label">Income</span>
                   <span className="summary-value" style={{ color: '#16a34a' }}>${formatAmount(totalIncome, 0)}</span>
                 </div>
               )}
+              <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
+                <span className="summary-label">Expenses</span>
+                <span className="summary-value negative">${formatAmount(totalTarget, 0)}</span>
+              </div>
               <div className="summary-card" style={{ borderRadius: 0, border: 'none' }}>
                 <span className="summary-label">Net</span>
                 <span className="summary-value" style={{ color: net >= 0 ? '#16a34a' : '#dc2626' }}>${formatAmount(net, 0)}</span>
@@ -797,18 +797,18 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
               </div>
               <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: incomeRows.length > 0 ? '1px solid var(--border)' : 'none' }}>
                 <span className="summary-label">Remaining</span>
-                <span className="summary-value">${formatAmount(Math.max(0, totalTarget - totalSpent), 0)}</span>
+                <span className="summary-value" style={{ color: 'var(--text-3)' }}>${formatAmount(Math.max(0, totalTarget - totalSpent), 0)}</span>
               </div>
               {incomeRows.length > 0 && (
                 <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
                   <span className="summary-label">Received</span>
-                  <span className="summary-value">${formatAmount(totalReceived, 0)}</span>
+                  <span className="summary-value" style={{ color: 'var(--text-3)' }}>${formatAmount(totalReceived, 0)}</span>
                 </div>
               )}
               {incomeRows.length > 0 && (
                 <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
                   <span className="summary-label">Yet to Receive</span>
-                  <span className="summary-value">${formatAmount(yetToReceive, 0)}</span>
+                  <span className="summary-value" style={{ color: 'var(--text-3)' }}>${formatAmount(yetToReceive, 0)}</span>
                 </div>
               )}
               {incomeRows.length > 0 && (
