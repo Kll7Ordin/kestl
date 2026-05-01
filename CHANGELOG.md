@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.5.1](https://github.com/Kll7Ordin/kestl/compare/v2.5.0...v2.5.1) (2026-05-01)
+
+
+### Bug Fixes
+
+* Amazon parser captures item names for Delivered orders ([88825ac](https://github.com/Kll7Ordin/kestl/commit/88825ac0879b2961d90465b50884476cbda36554))
+* clear search when switching tabs ([e98fb9e](https://github.com/Kll7Ordin/kestl/commit/e98fb9ea8f96692d928c6d9ab53b36132fbfa195))
+
 ## [2.5.0](https://github.com/Kll7Ordin/kestl/compare/v2.4.0...v2.5.0) (2026-05-01)
 
 
