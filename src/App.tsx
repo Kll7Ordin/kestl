@@ -231,6 +231,8 @@ function App() {
     setTabHistory((h) => [...h, tab]);
     setTab(newTab);
     setCustomBackHandler(null);
+    setSearchOpen(false);
+    setSearchTerm('');
   }
 
   if (!ready) {
