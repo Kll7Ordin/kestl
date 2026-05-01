@@ -194,6 +194,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       if (!scores) continue;
       const sorted = [...scores.entries()].sort((a, b) => b[1] - a[1]);
       if (!sorted.length) continue;
+      if (sorted.length >= 2 && sorted[0][1] < 2 * sorted[1][1]) continue;
       const [catId] = sorted[0];
       const cat = catMapLocal.get(catId);
       if (cat) suggestions.set(t.id, { txnId: t.id, categoryId: catId, categoryName: cat.name });

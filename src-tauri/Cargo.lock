@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "budget-app"
-version = "2.3.2"
+version = "2.3.3"
 dependencies = [
  "base64 0.22.1",
  "dirs",

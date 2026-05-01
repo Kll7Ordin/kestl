@@ -118,7 +118,9 @@ function computeGuessScores(descriptor: string, transactions: Transaction[]): Ma
 export function guessCategory(descriptor: string, transactions: Transaction[]): number | null {
   const scores = computeGuessScores(descriptor, transactions);
   if (scores.size === 0) return null;
-  return [...scores.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  const sorted = [...scores.entries()].sort((a, b) => b[1] - a[1]);
+  if (sorted.length >= 2 && sorted[0][1] < 2 * sorted[1][1]) return null;
+  return sorted[0][0];
 }
 
 /** Returns the full score map (catId → points) for tooltip display. */

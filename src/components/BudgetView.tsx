@@ -638,6 +638,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
 
   const totalTarget = regularRows.reduce((s, r) => s + r.target, 0);
   const totalSpent = regularRows.reduce((s, r) => s + r.spent, 0);
+  const totalRemaining = regularRows.reduce((s, r) => s + Math.max(0, r.target - r.spent), 0);
   const spentFromSavings = savingsRows.reduce((s, r) => s + r.spent, 0);
   const totalIncome = incomeRows.reduce((s, r) => s + r.target, 0);
   const totalReceived = allIncomeReceived;
@@ -797,18 +798,18 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
               </div>
               <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: incomeRows.length > 0 ? '1px solid var(--border)' : 'none' }}>
                 <span className="summary-label">Remaining</span>
-                <span className="summary-value" style={{ color: 'var(--text-3)' }}>${formatAmount(Math.max(0, totalTarget - totalSpent), 0)}</span>
+                <span className="summary-value">${formatAmount(totalRemaining, 0)}</span>
               </div>
               {incomeRows.length > 0 && (
                 <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
                   <span className="summary-label">Received</span>
-                  <span className="summary-value" style={{ color: 'var(--text-3)' }}>${formatAmount(totalReceived, 0)}</span>
+                  <span className="summary-value">${formatAmount(totalReceived, 0)}</span>
                 </div>
               )}
               {incomeRows.length > 0 && (
                 <div className="summary-card" style={{ borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' }}>
                   <span className="summary-label">Yet to Receive</span>
-                  <span className="summary-value" style={{ color: 'var(--text-3)' }}>${formatAmount(yetToReceive, 0)}</span>
+                  <span className="summary-value">${formatAmount(yetToReceive, 0)}</span>
                 </div>
               )}
               {incomeRows.length > 0 && (

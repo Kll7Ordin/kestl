@@ -195,6 +195,16 @@ export interface ExperimentalBudget {
   items: ExperimentalBudgetItem[];
 }
 
+export interface MergeLog {
+  id: number;
+  timestamp: string;
+  targetCategoryId: number;
+  sourceCategoryIds: number[];
+  affectedTransactionIds: number[];
+  affectedSplitIds: number[];
+  affectedRuleIds: number[];
+}
+
 export interface AppData {
   nextId: number;
   categories: Category[];
@@ -219,6 +229,7 @@ export interface AppData {
   displaySettings?: DisplaySettings;
   mortgage?: MortgageConfig;
   mortgageLedger?: MortgageLedgerEntry[];
+  mergeLogs?: MergeLog[];
 }
 
 export interface ColorThresholds {
@@ -709,22 +720,45 @@ export async function mergeCategories(sourceIds: number[], targetId: number): Pr
   pushUndoSnapshot();
   const sourceSet = new Set(sourceIds);
 
+  const affectedTransactionIds: number[] = [];
+  const affectedSplitIds: number[] = [];
+  const affectedRuleIds: number[] = [];
+
   for (const t of data.transactions) {
-    if (t.categoryId != null && sourceSet.has(t.categoryId)) t.categoryId = targetId;
+    if (t.categoryId != null && sourceSet.has(t.categoryId)) {
+      affectedTransactionIds.push(t.id);
+      t.categoryId = targetId;
+    }
   }
 
   for (const s of data.transactionSplits) {
-    if (sourceSet.has(s.categoryId)) s.categoryId = targetId;
+    if (sourceSet.has(s.categoryId)) {
+      affectedSplitIds.push(s.id);
+      s.categoryId = targetId;
+    }
   }
 
   for (const r of data.categoryRules) {
-    if (sourceSet.has(r.categoryId)) r.categoryId = targetId;
+    let ruleAffected = false;
+    if (sourceSet.has(r.categoryId)) { r.categoryId = targetId; ruleAffected = true; }
     if (r.splits) {
       for (const s of r.splits) {
-        if (sourceSet.has(s.categoryId)) s.categoryId = targetId;
+        if (sourceSet.has(s.categoryId)) { s.categoryId = targetId; ruleAffected = true; }
       }
     }
+    if (ruleAffected) affectedRuleIds.push(r.id);
   }
+
+  if (!data.mergeLogs) data.mergeLogs = [];
+  data.mergeLogs.push({
+    id: nextId(),
+    timestamp: new Date().toISOString(),
+    targetCategoryId: targetId,
+    sourceCategoryIds: sourceIds,
+    affectedTransactionIds,
+    affectedSplitIds,
+    affectedRuleIds,
+  });
 
   data.categories = data.categories.filter((c) => !sourceSet.has(c.id));
   data.budgets = data.budgets.filter((b) => !sourceSet.has(b.categoryId));
