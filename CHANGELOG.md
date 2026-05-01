@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.5.0](https://github.com/Kll7Ordin/kestl/compare/v2.4.0...v2.5.0) (2026-05-01)
+
+
+### Features
+
+* inline category rename, budget remaining fix, and confident-only suggestions ([97c7bc8](https://github.com/Kll7Ordin/kestl/commit/97c7bc8b395d5cebaa012735e9f054f2747f0f73))
+* keyword scoring improvements, category merge, and budget summary cleanup ([513e31b](https://github.com/Kll7Ordin/kestl/commit/513e31b2483337a504ff293fd02dd52e28a93f26))
+
+
+### Bug Fixes
+
+* disable DMA-BUF renderer on Linux to prevent EGL crash; fix savings label text ([6127734](https://github.com/Kll7Ordin/kestl/commit/61277340e060c877e3b6f4c2d832f6601f90bb2a))
+* MTD neutral numbers use var(--text-3); swap Income/Expenses order in Budget card ([f14a251](https://github.com/Kll7Ordin/kestl/commit/f14a25108aeeb047e2a6e1397d2edd43010b1d61))
+* MTD summary card colors — pro-rated spend coloring, neutral for others ([033e57c](https://github.com/Kll7Ordin/kestl/commit/033e57c519433a878d974c5a9c986c5132aa9667))
+
 ## [2.4.0](https://github.com/Kll7Ordin/kestl/compare/v2.3.3...v2.4.0) (2026-04-28)
 
 
