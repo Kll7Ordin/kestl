@@ -5,7 +5,7 @@ const NOISE = [
   /^delivered/i, /^return or replace/i, /^buy again/i,
   /^track package/i, /^get product support/i, /^write a product review/i,
   /^leave .* feedback/i, /^view order detail/i, /^archive order/i,
-  /^not yet shipped/i, /^arriving/i, /^package was/i,
+  /^not yet shipped/i, /^arriving/i, /^package was/i, /^return complete/i, /^cancelled/i,
   /^view return/i, /^when will i get/i, /^your return is/i,
   /^your order was/i, /^you have not been/i, /^ship to$/i,
   /^view your item/i, /^share gift receipt/i, /^ask a product/i,
@@ -98,7 +98,6 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
     while (i < nonEmpty.length && !/^order\s+placed$/i.test(nonEmpty[i])) {
       const line = nonEmpty[i];
 
-      if (/^(delivered|return complete|cancelled)\b/i.test(line)) break;
 
       if (!txnDate) {
         const d = parseAmazonDate(line);
