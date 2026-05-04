@@ -276,6 +276,12 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
     ...data.transactions.map((t) => t.instrument),
   ])].filter(Boolean).sort(), [data.transactions]);
 
+  const purgeYears = useMemo(() => {
+    const yrs = new Set(data.transactions.map((t) => t.txnDate.slice(0, 4)));
+    const arr = [...yrs].sort((a, b) => Number(b) - Number(a));
+    return arr.length ? arr : [new Date().getFullYear().toString()];
+  }, [data.transactions]);
+
   const [pendingEncryptedPath, setPendingEncryptedPath] = useState<string | null>(null);
   const [colorThresholds, setColorThresholdsState] = useState<ColorThresholds>(() => getColorThresholds());
   const [ytdMode, setYtdModeState] = useState<'ytd' | 'rolling12'>(() => getDisplaySettings().ytdMode);
@@ -781,6 +787,279 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
     );
   }
 
+  if (showRulesScreen) {
+    return (
+      <>
+        <div style={{ position: 'fixed', top: 52, left: 0, right: 0, bottom: 0, zIndex: 200, background: 'var(--bg)', overflowY: 'auto', padding: '1.5rem clamp(0.75rem, 6vw, 8rem)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
+            <button className="btn btn-ghost" onClick={() => setShowRulesScreen(false)}>← Back</button>
+            <h1 style={{ margin: 0, fontSize: '1.45rem', fontWeight: 700 }}>Category Rules</h1>
+          </div>
+          {/* Run rule dialog */}
+          {runRuleDialogId !== null && (() => {
+            const rule = data.categoryRules.find((r) => r.id === runRuleDialogId);
+            if (!rule) return null;
+            return createPortal(
+              <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <div className="card" style={{ minWidth: 320, maxWidth: 480, padding: '1.5rem', background: 'var(--bg-2)' }}>
+                  <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: '0.25rem' }}>Run rule on historical transactions</div>
+                  <div style={{ fontSize: '0.8rem', opacity: 0.65, marginBottom: '1rem' }}>
+                    Pattern: <strong>{rule.pattern}</strong> · {rule.matchType}
+                  </div>
+                  <div className="field" style={{ marginBottom: '0.5rem' }}>
+                    <label>Date range</label>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                        <input type="checkbox" checked={!!runRuleStartDate} onChange={(e) => setRunRuleStartDate(e.target.checked ? new Date().toISOString().split('T')[0] : '')} />
+                        From:
+                        {runRuleStartDate ? (
+                          <DateInput value={runRuleStartDate} onChange={setRunRuleStartDate} style={{ flex: 1 }} />
+                        ) : (
+                          <span style={{ opacity: 0.4 }}>all time</span>
+                        )}
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                        <input type="checkbox" checked={!!runRuleEndDate} onChange={(e) => setRunRuleEndDate(e.target.checked ? new Date().toISOString().split('T')[0] : '')} />
+                        To:
+                        {runRuleEndDate ? (
+                          <DateInput value={runRuleEndDate} onChange={setRunRuleEndDate} style={{ flex: 1 }} />
+                        ) : (
+                          <span style={{ opacity: 0.4 }}>all time</span>
+                        )}
+                      </label>
+                    </div>
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={runRuleIncludeCategorized} onChange={(e) => setRunRuleIncludeCategorized(e.target.checked)} />
+                    <span style={{ fontSize: '0.85rem' }}>Also recategorize already-categorized transactions</span>
+                  </label>
+                  {runRuleResult !== null && (
+                    <div style={{ fontSize: '0.82rem', padding: '0.4rem 0.6rem', borderRadius: 5, background: 'rgba(52,211,153,0.08)', borderLeft: '3px solid var(--green)', marginBottom: '0.75rem' }}>
+                      Applied to {runRuleResult} transaction{runRuleResult !== 1 ? 's' : ''}.
+                    </div>
+                  )}
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button className="btn btn-primary" onClick={handleRunRule}>Run now</button>
+                    <button className="btn btn-ghost" onClick={closeRunRuleDialog}>Close</button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            );
+          })()}
+
+          <div className="card">
+            <div style={{ fontSize: '0.72rem', opacity: 0.55, marginBottom: '0.5rem' }}>
+              Rules run in order — last matching rule wins. Drag rows to reorder.
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr><th style={{ width: 32 }}>#</th><th style={{ width: 20 }}></th><th>Pattern</th><th>Match</th><th>Amount</th><th>Category</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {rules.map((r) => {
+                      return (
+                        <tr
+                          key={r.id}
+                          draggable
+                          onDragStart={(e) => { e.dataTransfer.setData('ruleId', String(r.id)); e.dataTransfer.effectAllowed = 'move'; }}
+                          onDragOver={(e) => { e.preventDefault(); setDragOverRuleId(r.id); }}
+                          onDragLeave={() => setDragOverRuleId(null)}
+                          onDrop={(e) => { e.preventDefault(); const draggedId = Number(e.dataTransfer.getData('ruleId')); handleRulesDragEnd(draggedId, r.id); }}
+                          style={{ opacity: dragOverRuleId === r.id ? 0.5 : 1, background: dragOverRuleId === r.id ? 'var(--accent-muted)' : undefined }}
+                        >
+                          <td style={{ fontSize: '0.72rem', opacity: 0.45, width: 32 }}>{r.orderNum}</td>
+                          <td style={{ cursor: 'grab', opacity: 0.4, userSelect: 'none', width: 20 }}>⠿</td>
+                          <td style={{ wordBreak: 'break-word', maxWidth: 260 }}>{r.pattern}</td>
+                          <td><span className="chip">{r.matchType}</span></td>
+                          <td>{r.amountMatch != null ? `$${formatAmount(r.amountMatch)}` : '—'}</td>
+                          <td>
+                            {r.splits && r.splits.length >= 2
+                              ? <span style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>Split: {r.splits.map((s) => `${catMap.get(s.categoryId) ?? '?'} ${s.percent != null ? s.percent + '%' : '$' + (s.amount ?? 0)}`).join(' + ')}</span>
+                              : r.catName}
+                          </td>
+                          <td style={{ display: 'flex', gap: '0.3rem' }}>
+                            <button className="btn btn-ghost btn-sm" onClick={() => openRunRuleDialog(r.id)} title="Run this rule on historical transactions">Run</button>
+                            <button className="btn btn-ghost btn-sm" onClick={() => openEditRule(r)}>Edit</button>
+                            <button className="btn btn-danger btn-sm" onClick={() => handleDeleteRule(r.id)}>&times;</button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+
+                  {data.categoryRules.length === 0 && <tr><td colSpan={7} className="empty">No rules</td></tr>}
+                </tbody>
+              </table>
+            </div>
+            {/* Simple rule */}
+            <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.75rem', paddingTop: '0.75rem' }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.5rem' }}>Add simple rule</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-end' }}>
+                <div className="field" style={{ flex: '2 1 160px', marginBottom: 0 }}>
+                  <label>Pattern</label>
+                  <input value={newPattern} onChange={(e) => setNewPattern(e.target.value)} placeholder="keyword" />
+                </div>
+                <div className="field" style={{ flex: '1 1 100px', marginBottom: 0 }}>
+                  <label>Match</label>
+                  <SearchableSelect
+                    options={[{ value: 'contains', label: 'Contains' }, { value: 'exact', label: 'Exact' }]}
+                    value={newMatchType}
+                    onChange={(v) => setNewMatchType(v as 'exact' | 'contains')}
+                    placeholder="Match"
+                  />
+                </div>
+                <div className="field" style={{ flex: '2 1 160px', marginBottom: 0 }}>
+                  <label>Category</label>
+                  <SearchableSelect
+                    options={categoryOptions}
+                    value={newRuleCat}
+                    onChange={(v) => setNewRuleCat(v === '' ? '' : Number(v))}
+                    placeholder="Select..."
+                  />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
+                  <input type="checkbox" id="rule-amount-cb2" checked={!!newRuleAmountRequired} onChange={(e) => { setNewRuleAmountRequired(e.target.checked); if (!e.target.checked) setNewRuleAmount(''); }} />
+                  <label htmlFor="rule-amount-cb2" style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>Amt</label>
+                  {newRuleAmountRequired && (
+                    <input type="number" step="0.01" value={newRuleAmount} onChange={(e) => setNewRuleAmount(e.target.value)} placeholder="0" style={{ width: '80px' }} />
+                  )}
+                </div>
+                <button className="btn btn-primary" style={{ flexShrink: 0, alignSelf: 'flex-end' }} onClick={() => handleAddRule(false)}>Add Rule</button>
+              </div>
+            </div>
+
+            {/* Split rule */}
+            <div style={{ borderTop: '1px solid var(--border)', marginTop: '1rem', paddingTop: '0.75rem' }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.5rem' }}>Add split rule — splits transaction into multiple categories</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-end', marginBottom: '0.5rem' }}>
+                <div className="field" style={{ flex: '2 1 160px', marginBottom: 0 }}>
+                  <label>Pattern</label>
+                  <input value={newPattern} onChange={(e) => setNewPattern(e.target.value)} placeholder="keyword" />
+                </div>
+                <div className="field" style={{ flex: '1 1 100px', marginBottom: 0 }}>
+                  <label>Match</label>
+                  <SearchableSelect
+                    options={[{ value: 'contains', label: 'Contains' }, { value: 'exact', label: 'Exact' }]}
+                    value={newMatchType}
+                    onChange={(v) => setNewMatchType(v as 'exact' | 'contains')}
+                    placeholder="Match"
+                  />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexShrink: 0 }}>
+                  <button className={`btn btn-sm ${newRuleSplitType === '%' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setNewRuleSplitType('%')}>%</button>
+                  <button className={`btn btn-sm ${newRuleSplitType === '$' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setNewRuleSplitType('$')}>$</button>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', background: 'var(--bg-3)', padding: '0.65rem', borderRadius: 'var(--radius)' }}>
+                {newRuleSplits.map((s, i) => (
+                  <div key={i} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ flex: '2 1 140px' }}>
+                      <SearchableSelect
+                        options={categoryOptions}
+                        value={s.categoryId}
+                        onChange={(v) => setNewRuleSplits((prev) => prev.map((x, j) => j === i ? { ...x, categoryId: v === '' ? '' : Number(v) } : x))}
+                        placeholder="Category"
+                      />
+                    </div>
+                    <input type="number" step="0.01" placeholder={newRuleSplitType === '%' ? '50' : '0.00'} value={s.amount} onChange={(e) => setNewRuleSplits((prev) => prev.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))} style={{ width: 80, fontSize: '0.82rem' }} />
+                    {newRuleSplits.length > 2 && (
+                      <button className="btn btn-ghost btn-sm" onClick={() => setNewRuleSplits((prev) => prev.filter((_, j) => j !== i))}>×</button>
+                    )}
+                  </div>
+                ))}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem' }}>
+                  <button className="btn btn-ghost btn-sm" onClick={() => setNewRuleSplits((prev) => [...prev, { categoryId: '', amount: '' }])}>+ Add row</button>
+                  {newRuleSplitType === '%' && (
+                    <span style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>
+                      Total: {newRuleSplits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0)}%
+                    </span>
+                  )}
+                </div>
+              </div>
+              <button className="btn btn-primary" style={{ marginTop: '0.5rem' }} onClick={() => handleAddRule(true)}>Add Split Rule</button>
+            </div>
+
+            <button className="btn btn-ghost btn-sm" onClick={runRecategorize} style={{ marginTop: '1rem' }}>
+              Re-categorize uncategorized
+            </button>
+          </div>
+        </div>
+        {editingRule !== null && createPortal(
+          <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
+            <div className="card" style={{ width: '100%', maxWidth: 480 }}>
+              <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: '1rem' }}>Edit Rule</div>
+
+              <div className="field">
+                <label>Pattern</label>
+                <input value={editPattern} onChange={(e) => setEditPattern(e.target.value)} />
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                <button className={`btn btn-sm ${editMatchType === 'exact' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setEditMatchType('exact')}>Exact</button>
+                <button className={`btn btn-sm ${editMatchType === 'contains' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setEditMatchType('contains')}>Contains</button>
+              </div>
+              <div className="field">
+                <label>Amount condition (optional)</label>
+                <input type="number" step="0.01" value={editAmountMatch} onChange={(e) => setEditAmountMatch(e.target.value)} placeholder="any" />
+              </div>
+
+              {editSplits.length >= 2 ? (
+                <>
+                  <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem' }}>Split by:
+                    <button className={`btn btn-sm ${editSplitType === '%' ? 'btn-primary' : 'btn-ghost'}`} style={{ marginLeft: '0.5rem' }} onClick={() => setEditSplitType('%')}>%</button>
+                    <button className={`btn btn-sm ${editSplitType === '$' ? 'btn-primary' : 'btn-ghost'}`} style={{ marginLeft: '0.25rem' }} onClick={() => setEditSplitType('$')}>$</button>
+                  </div>
+                  {editSplits.map((s, i) => (
+                    <div key={i} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.4rem', alignItems: 'center' }}>
+                      <div style={{ flex: 1 }}>
+                        <SearchableSelect
+                          options={categoryOptions}
+                          value={s.categoryId}
+                          onChange={(v) => setEditSplits((prev) => prev.map((x, j) => j === i ? { ...x, categoryId: v === '' ? '' : Number(v) } : x))}
+                          placeholder="Category"
+                        />
+                      </div>
+                      <input type="number" step="0.01" placeholder={editSplitType === '%' ? '50' : '0.00'} value={s.amount}
+                        onChange={(e) => setEditSplits((prev) => prev.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
+                        style={{ width: 80 }} />
+                      {editSplits.length > 2 && <button className="btn btn-ghost btn-sm" style={{ color: 'var(--red)' }} onClick={() => setEditSplits((prev) => prev.filter((_, j) => j !== i))}>×</button>}
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.75rem' }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditSplits((prev) => [...prev, { categoryId: '', amount: '' }])}>+ Add row</button>
+                    {(() => {
+                      const total = editSplits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+                      const ok = editSplitType === '%' ? Math.abs(total - 100) < 0.01 : true;
+                      return <span style={{ fontSize: '0.75rem', color: ok ? 'var(--green)' : 'var(--red)' }}>
+                        {editSplitType === '%' ? `Total: ${total.toFixed(1)}%` : `Total: $${total.toFixed(2)}`}
+                      </span>;
+                    })()}
+                  </div>
+                </>
+              ) : (
+                <div className="field">
+                  <label>Category</label>
+                  <SearchableSelect
+                    options={categoryOptions}
+                    value={editCatId}
+                    onChange={(v) => setEditCatId(v === '' ? '' : Number(v))}
+                    placeholder="Select category"
+                  />
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
+                <button className="btn btn-primary" onClick={handleSaveRule}>Save & Apply</button>
+                <button className="btn btn-ghost" onClick={() => setEditingRule(null)}>Cancel</button>
+              </div>
+            </div>
+          </div>,
+          document.body,
+        )}
+      </>
+    );
+  }
+
   return (
     <div>
       <h1 className="view-title">Settings</h1>
@@ -1036,11 +1315,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                 <label>Year</label>
                 <select value={purgeYear} onChange={(e) => setPurgeYear(e.target.value)}>
                   <option value="">Select...</option>
-                  {(() => {
-                    const yrs = new Set(data.transactions.map((t) => t.txnDate.slice(0, 4)));
-                    const arr = [...yrs].sort((a, b) => Number(b) - Number(a));
-                    return arr.length ? arr : [new Date().getFullYear().toString()];
-                  })().map((y) => <option key={y} value={y}>{y}</option>)}
+                  {purgeYears.map((y) => <option key={y} value={y}>{y}</option>)}
                 </select>
               </div>
             </>
@@ -1249,205 +1524,6 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
       </div>
 
       {showCategoriesScreen && <CategoriesScreen onClose={() => setShowCategoriesScreen(false)} />}
-
-      {/* Rules full-screen overlay (below tab bar) */}
-      {showRulesScreen && (
-        <div style={{ position: 'fixed', top: 52, left: 0, right: 0, bottom: 0, zIndex: 200, background: 'var(--bg)', overflowY: 'auto', padding: '1.5rem clamp(0.75rem, 6vw, 8rem)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
-            <button className="btn btn-ghost" onClick={() => setShowRulesScreen(false)}>← Back</button>
-            <h1 style={{ margin: 0, fontSize: '1.45rem', fontWeight: 700 }}>Category Rules</h1>
-          </div>
-          {/* Run rule dialog */}
-          {runRuleDialogId !== null && (() => {
-            const rule = data.categoryRules.find((r) => r.id === runRuleDialogId);
-            if (!rule) return null;
-            return createPortal(
-              <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <div className="card" style={{ minWidth: 320, maxWidth: 480, padding: '1.5rem', background: 'var(--bg-2)' }}>
-                  <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: '0.25rem' }}>Run rule on historical transactions</div>
-                  <div style={{ fontSize: '0.8rem', opacity: 0.65, marginBottom: '1rem' }}>
-                    Pattern: <strong>{rule.pattern}</strong> · {rule.matchType}
-                  </div>
-                  <div className="field" style={{ marginBottom: '0.5rem' }}>
-                    <label>Date range</label>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
-                        <input type="checkbox" checked={!!runRuleStartDate} onChange={(e) => setRunRuleStartDate(e.target.checked ? new Date().toISOString().split('T')[0] : '')} />
-                        From:
-                        {runRuleStartDate ? (
-                          <DateInput value={runRuleStartDate} onChange={setRunRuleStartDate} style={{ flex: 1 }} />
-                        ) : (
-                          <span style={{ opacity: 0.4 }}>all time</span>
-                        )}
-                      </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
-                        <input type="checkbox" checked={!!runRuleEndDate} onChange={(e) => setRunRuleEndDate(e.target.checked ? new Date().toISOString().split('T')[0] : '')} />
-                        To:
-                        {runRuleEndDate ? (
-                          <DateInput value={runRuleEndDate} onChange={setRunRuleEndDate} style={{ flex: 1 }} />
-                        ) : (
-                          <span style={{ opacity: 0.4 }}>all time</span>
-                        )}
-                      </label>
-                    </div>
-                  </div>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', cursor: 'pointer' }}>
-                    <input type="checkbox" checked={runRuleIncludeCategorized} onChange={(e) => setRunRuleIncludeCategorized(e.target.checked)} />
-                    <span style={{ fontSize: '0.85rem' }}>Also recategorize already-categorized transactions</span>
-                  </label>
-                  {runRuleResult !== null && (
-                    <div style={{ fontSize: '0.82rem', padding: '0.4rem 0.6rem', borderRadius: 5, background: 'rgba(52,211,153,0.08)', borderLeft: '3px solid var(--green)', marginBottom: '0.75rem' }}>
-                      Applied to {runRuleResult} transaction{runRuleResult !== 1 ? 's' : ''}.
-                    </div>
-                  )}
-                  <div style={{ display: 'flex', gap: '0.5rem' }}>
-                    <button className="btn btn-primary" onClick={handleRunRule}>Run now</button>
-                    <button className="btn btn-ghost" onClick={closeRunRuleDialog}>Close</button>
-                  </div>
-                </div>
-              </div>,
-              document.body
-            );
-          })()}
-
-          <div className="card">
-            <div style={{ fontSize: '0.72rem', opacity: 0.55, marginBottom: '0.5rem' }}>
-              Rules run in order — last matching rule wins. Drag rows to reorder.
-            </div>
-            <div style={{ overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr><th style={{ width: 32 }}>#</th><th style={{ width: 20 }}></th><th>Pattern</th><th>Match</th><th>Amount</th><th>Category</th><th></th></tr>
-                </thead>
-                <tbody>
-                  {rules.map((r) => {
-                      return (
-                        <tr
-                          key={r.id}
-                          draggable
-                          onDragStart={(e) => { e.dataTransfer.setData('ruleId', String(r.id)); e.dataTransfer.effectAllowed = 'move'; }}
-                          onDragOver={(e) => { e.preventDefault(); setDragOverRuleId(r.id); }}
-                          onDragLeave={() => setDragOverRuleId(null)}
-                          onDrop={(e) => { e.preventDefault(); const draggedId = Number(e.dataTransfer.getData('ruleId')); handleRulesDragEnd(draggedId, r.id); }}
-                          style={{ opacity: dragOverRuleId === r.id ? 0.5 : 1, background: dragOverRuleId === r.id ? 'var(--accent-muted)' : undefined }}
-                        >
-                          <td style={{ fontSize: '0.72rem', opacity: 0.45, width: 32 }}>{r.orderNum}</td>
-                          <td style={{ cursor: 'grab', opacity: 0.4, userSelect: 'none', width: 20 }}>⠿</td>
-                          <td style={{ wordBreak: 'break-word', maxWidth: 260 }}>{r.pattern}</td>
-                          <td><span className="chip">{r.matchType}</span></td>
-                          <td>{r.amountMatch != null ? `$${formatAmount(r.amountMatch)}` : '—'}</td>
-                          <td>
-                            {r.splits && r.splits.length >= 2
-                              ? <span style={{ fontSize: '0.8rem', color: 'var(--accent)' }}>Split: {r.splits.map((s) => `${catMap.get(s.categoryId) ?? '?'} ${s.percent != null ? s.percent + '%' : '$' + (s.amount ?? 0)}`).join(' + ')}</span>
-                              : r.catName}
-                          </td>
-                          <td style={{ display: 'flex', gap: '0.3rem' }}>
-                            <button className="btn btn-ghost btn-sm" onClick={() => openRunRuleDialog(r.id)} title="Run this rule on historical transactions">Run</button>
-                            <button className="btn btn-ghost btn-sm" onClick={() => openEditRule(r)}>Edit</button>
-                            <button className="btn btn-danger btn-sm" onClick={() => handleDeleteRule(r.id)}>&times;</button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-
-                  {data.categoryRules.length === 0 && <tr><td colSpan={7} className="empty">No rules</td></tr>}
-                </tbody>
-              </table>
-            </div>
-            {/* Simple rule */}
-            <div style={{ borderTop: '1px solid var(--border)', marginTop: '0.75rem', paddingTop: '0.75rem' }}>
-              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.5rem' }}>Add simple rule</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-end' }}>
-                <div className="field" style={{ flex: '2 1 160px', marginBottom: 0 }}>
-                  <label>Pattern</label>
-                  <input value={newPattern} onChange={(e) => setNewPattern(e.target.value)} placeholder="keyword" />
-                </div>
-                <div className="field" style={{ flex: '1 1 100px', marginBottom: 0 }}>
-                  <label>Match</label>
-                  <SearchableSelect
-                    options={[{ value: 'contains', label: 'Contains' }, { value: 'exact', label: 'Exact' }]}
-                    value={newMatchType}
-                    onChange={(v) => setNewMatchType(v as 'exact' | 'contains')}
-                    placeholder="Match"
-                  />
-                </div>
-                <div className="field" style={{ flex: '2 1 160px', marginBottom: 0 }}>
-                  <label>Category</label>
-                  <SearchableSelect
-                    options={categoryOptions}
-                    value={newRuleCat}
-                    onChange={(v) => setNewRuleCat(v === '' ? '' : Number(v))}
-                    placeholder="Select..."
-                  />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexShrink: 0 }}>
-                  <input type="checkbox" id="rule-amount-cb2" checked={!!newRuleAmountRequired} onChange={(e) => { setNewRuleAmountRequired(e.target.checked); if (!e.target.checked) setNewRuleAmount(''); }} />
-                  <label htmlFor="rule-amount-cb2" style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>Amt</label>
-                  {newRuleAmountRequired && (
-                    <input type="number" step="0.01" value={newRuleAmount} onChange={(e) => setNewRuleAmount(e.target.value)} placeholder="0" style={{ width: '80px' }} />
-                  )}
-                </div>
-                <button className="btn btn-primary" style={{ flexShrink: 0, alignSelf: 'flex-end' }} onClick={() => handleAddRule(false)}>Add Rule</button>
-              </div>
-            </div>
-
-            {/* Split rule */}
-            <div style={{ borderTop: '1px solid var(--border)', marginTop: '1rem', paddingTop: '0.75rem' }}>
-              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: '0.5rem' }}>Add split rule — splits transaction into multiple categories</div>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-end', marginBottom: '0.5rem' }}>
-                <div className="field" style={{ flex: '2 1 160px', marginBottom: 0 }}>
-                  <label>Pattern</label>
-                  <input value={newPattern} onChange={(e) => setNewPattern(e.target.value)} placeholder="keyword" />
-                </div>
-                <div className="field" style={{ flex: '1 1 100px', marginBottom: 0 }}>
-                  <label>Match</label>
-                  <SearchableSelect
-                    options={[{ value: 'contains', label: 'Contains' }, { value: 'exact', label: 'Exact' }]}
-                    value={newMatchType}
-                    onChange={(v) => setNewMatchType(v as 'exact' | 'contains')}
-                    placeholder="Match"
-                  />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', flexShrink: 0 }}>
-                  <button className={`btn btn-sm ${newRuleSplitType === '%' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setNewRuleSplitType('%')}>%</button>
-                  <button className={`btn btn-sm ${newRuleSplitType === '$' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setNewRuleSplitType('$')}>$</button>
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', background: 'var(--bg-3)', padding: '0.65rem', borderRadius: 'var(--radius)' }}>
-                {newRuleSplits.map((s, i) => (
-                  <div key={i} style={{ display: 'flex', gap: '0.4rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                    <div style={{ flex: '2 1 140px' }}>
-                      <SearchableSelect
-                        options={categoryOptions}
-                        value={s.categoryId}
-                        onChange={(v) => setNewRuleSplits((prev) => prev.map((x, j) => j === i ? { ...x, categoryId: v === '' ? '' : Number(v) } : x))}
-                        placeholder="Category"
-                      />
-                    </div>
-                    <input type="number" step="0.01" placeholder={newRuleSplitType === '%' ? '50' : '0.00'} value={s.amount} onChange={(e) => setNewRuleSplits((prev) => prev.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))} style={{ width: 80, fontSize: '0.82rem' }} />
-                    {newRuleSplits.length > 2 && (
-                      <button className="btn btn-ghost btn-sm" onClick={() => setNewRuleSplits((prev) => prev.filter((_, j) => j !== i))}>×</button>
-                    )}
-                  </div>
-                ))}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem' }}>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setNewRuleSplits((prev) => [...prev, { categoryId: '', amount: '' }])}>+ Add row</button>
-                  {newRuleSplitType === '%' && (
-                    <span style={{ fontSize: '0.75rem', color: 'var(--text-3)' }}>
-                      Total: {newRuleSplits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0)}%
-                    </span>
-                  )}
-                </div>
-              </div>
-              <button className="btn btn-primary" style={{ marginTop: '0.5rem' }} onClick={() => handleAddRule(true)}>Add Split Rule</button>
-            </div>
-
-            <button className="btn btn-ghost btn-sm" onClick={runRecategorize} style={{ marginTop: '1rem' }}>
-              Re-categorize uncategorized
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* Recurring Templates */}
       <div id="settings-recurring" className="section-title">Recurring Templates</div>
@@ -1961,78 +2037,6 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
           </div>
         </div>
       )}
-      {editingRule !== null && createPortal(
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' }}>
-          <div className="card" style={{ width: '100%', maxWidth: 480 }}>
-            <div style={{ fontWeight: 700, fontSize: '1rem', marginBottom: '1rem' }}>Edit Rule</div>
-
-            <div className="field">
-              <label>Pattern</label>
-              <input value={editPattern} onChange={(e) => setEditPattern(e.target.value)} />
-            </div>
-            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
-              <button className={`btn btn-sm ${editMatchType === 'exact' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setEditMatchType('exact')}>Exact</button>
-              <button className={`btn btn-sm ${editMatchType === 'contains' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setEditMatchType('contains')}>Contains</button>
-            </div>
-            <div className="field">
-              <label>Amount condition (optional)</label>
-              <input type="number" step="0.01" value={editAmountMatch} onChange={(e) => setEditAmountMatch(e.target.value)} placeholder="any" />
-            </div>
-
-            {editSplits.length >= 2 ? (
-              <>
-                <div style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '0.5rem' }}>Split by:
-                  <button className={`btn btn-sm ${editSplitType === '%' ? 'btn-primary' : 'btn-ghost'}`} style={{ marginLeft: '0.5rem' }} onClick={() => setEditSplitType('%')}>%</button>
-                  <button className={`btn btn-sm ${editSplitType === '$' ? 'btn-primary' : 'btn-ghost'}`} style={{ marginLeft: '0.25rem' }} onClick={() => setEditSplitType('$')}>$</button>
-                </div>
-                {editSplits.map((s, i) => (
-                  <div key={i} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.4rem', alignItems: 'center' }}>
-                    <div style={{ flex: 1 }}>
-                      <SearchableSelect
-                        options={categoryOptions}
-                        value={s.categoryId}
-                        onChange={(v) => setEditSplits((prev) => prev.map((x, j) => j === i ? { ...x, categoryId: v === '' ? '' : Number(v) } : x))}
-                        placeholder="Category"
-                      />
-                    </div>
-                    <input type="number" step="0.01" placeholder={editSplitType === '%' ? '50' : '0.00'} value={s.amount}
-                      onChange={(e) => setEditSplits((prev) => prev.map((x, j) => j === i ? { ...x, amount: e.target.value } : x))}
-                      style={{ width: 80 }} />
-                    {editSplits.length > 2 && <button className="btn btn-ghost btn-sm" style={{ color: 'var(--red)' }} onClick={() => setEditSplits((prev) => prev.filter((_, j) => j !== i))}>×</button>}
-                  </div>
-                ))}
-                <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '0.75rem' }}>
-                  <button className="btn btn-ghost btn-sm" onClick={() => setEditSplits((prev) => [...prev, { categoryId: '', amount: '' }])}>+ Add row</button>
-                  {(() => {
-                    const total = editSplits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
-                    const ok = editSplitType === '%' ? Math.abs(total - 100) < 0.01 : true;
-                    return <span style={{ fontSize: '0.75rem', color: ok ? 'var(--green)' : 'var(--red)' }}>
-                      {editSplitType === '%' ? `Total: ${total.toFixed(1)}%` : `Total: $${total.toFixed(2)}`}
-                    </span>;
-                  })()}
-                </div>
-              </>
-            ) : (
-              <div className="field">
-                <label>Category</label>
-                <SearchableSelect
-                  options={categoryOptions}
-                  value={editCatId}
-                  onChange={(v) => setEditCatId(v === '' ? '' : Number(v))}
-                  placeholder="Select category"
-                />
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-              <button className="btn btn-primary" onClick={handleSaveRule}>Save & Apply</button>
-              <button className="btn btn-ghost" onClick={() => setEditingRule(null)}>Cancel</button>
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )}
-
       {/* Built-in parser detail overlay */}
       {selectedBuiltin != null && (
         <div style={{ position: 'fixed', top: 52, left: 0, right: 0, bottom: 0, zIndex: 200, background: 'var(--bg)', overflowY: 'auto', padding: '1.5rem clamp(0.75rem, 6vw, 8rem)' }}>

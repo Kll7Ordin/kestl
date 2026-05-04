@@ -80,10 +80,13 @@ export async function matchPaypalTransactions(paypalIds: number[]): Promise<Payp
 
     for (const bank of candidates) {
       if (usedIds.has(bank.id)) continue;
+      // Credits (refunds) must match credits; debits must match debits
+      if (pp.ignoreInBudget !== bank.ignoreInBudget) continue;
       const days = dateDiffDays(pp.txnDate, bank.txnDate);
       if (days > 5) continue;
 
-      const amountDiff = Math.abs(pp.amount - bank.amount);
+      // Bank credits are stored as negative amounts; use absolute value for comparison
+      const amountDiff = Math.abs(pp.amount - Math.abs(bank.amount));
       const exactAmt = amountDiff <= 0.02;
       const fuzzyAmt = amountDiff <= pp.amount * 0.15;
       if (!exactAmt && !fuzzyAmt) continue;
@@ -113,6 +116,7 @@ export async function matchPaypalTransactions(paypalIds: number[]): Promise<Payp
     if (bestMatch) {
       if (isExact) {
         applyPaypalToBank(bestMatch, pp);
+        if (pp.ignoreInBudget) linkRefundToOriginal(bestMatch, data.transactions);
         ppToRemove.add(pp.id);
         usedIds.add(bestMatch.id);
         autoMatched++;
@@ -131,6 +135,7 @@ export async function matchPaypalTransactions(paypalIds: number[]): Promise<Payp
     if (bestMatch) {
       if (isExact) {
         applyPaypalToBank(bestMatch, pp);
+        if (pp.ignoreInBudget) linkRefundToOriginal(bestMatch, data.transactions);
         ppToRemove.add(pp.id);
         usedIds.add(bestMatch.id);
         autoMatched++;
@@ -157,6 +162,54 @@ function applyPaypalToBank(bankTxn: Transaction, ppTxn: { descriptor: string; ca
   bankTxn.descriptor = ppTxn.descriptor;
   bankTxn.linkedTransactionId = -1; // sentinel: PayPal-linked
   if (ppTxn.categoryId && !bankTxn.categoryId) bankTxn.categoryId = ppTxn.categoryId;
+}
+
+/**
+ * For a PayPal refund credit that was just enriched, find the original payment it refunds
+ * (same merchant, matching amount, earlier date) and inherit its category + link bidirectionally.
+ */
+function linkRefundToOriginal(refundCredit: Transaction, allTxns: Transaction[]): void {
+  // PayPal descriptors: "PayPal | Merchant Name | Type" or "PayPal | Merchant Name | Type . Refunded"
+  const parts = refundCredit.descriptor.split(' | ');
+  if (parts.length < 2) return;
+  const merchant = parts[1];
+  if (!merchant) return;
+
+  const refundAmt = Math.abs(refundCredit.amount);
+  let bestMatch: Transaction | null = null;
+  let bestDate = '';
+
+  for (const t of allTxns) {
+    if (t.ignoreInBudget) continue;
+    if (t.id === refundCredit.id) continue;
+    if (Math.abs(t.amount - refundAmt) > 0.02) continue;
+    if (t.txnDate >= refundCredit.txnDate) continue;
+    if (!t.descriptor.includes(merchant)) continue;
+    // Skip originals already linked to a specific refund
+    if (t.linkedTransactionId && t.linkedTransactionId > 0) continue;
+    if (!bestMatch || t.txnDate > bestDate) {
+      bestMatch = t;
+      bestDate = t.txnDate;
+    }
+  }
+
+  if (!bestMatch) return;
+
+  // Inherit category: prefer the direct original, fall back to any categorized same-merchant txn
+  if (!refundCredit.categoryId) {
+    const categorySource = bestMatch.categoryId != null
+      ? bestMatch
+      : allTxns.find((t) => t.categoryId != null && t.descriptor.includes(merchant));
+    if (categorySource?.categoryId != null) {
+      refundCredit.categoryId = categorySource.categoryId;
+    }
+  }
+  // Overwrite -1 sentinel with the actual original's ID
+  refundCredit.linkedTransactionId = bestMatch.id;
+  // Link original back (only if not already pointing to a specific refund)
+  if (!bestMatch.linkedTransactionId || bestMatch.linkedTransactionId === -1) {
+    bestMatch.linkedTransactionId = refundCredit.id;
+  }
 }
 
 /** Re-run matching for all existing unlinked PayPal transactions in the system. */

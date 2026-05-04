@@ -774,8 +774,10 @@ export async function addCategoryRule(rule: Omit<CategoryRule, 'id'>): Promise<n
 }
 
 export async function updateCategoryRule(id: number, updates: Partial<Omit<CategoryRule, 'id'>>): Promise<void> {
-  const r = data.categoryRules.find((r) => r.id === id);
-  if (r) { Object.assign(r, updates); await persist(); }
+  const idx = data.categoryRules.findIndex((r) => r.id === id);
+  if (idx === -1) return;
+  data.categoryRules = data.categoryRules.map((r) => r.id === id ? { ...r, ...updates } : r);
+  await persist();
 }
 
 export async function deleteCategoryRule(id: number): Promise<void> {
