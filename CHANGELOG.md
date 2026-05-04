@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.2](https://github.com/Kll7Ordin/kestl/compare/v2.5.1...v2.5.2) (2026-05-04)
+
+
+### Bug Fixes
+
+* rules screen performance, rule save, and PayPal refund matching ([12a2757](https://github.com/Kll7Ordin/kestl/commit/12a27575939fd229ae65a7694ff2d8db8288257b))
+
 ## [2.5.1](https://github.com/Kll7Ordin/kestl/compare/v2.5.0...v2.5.1) (2026-05-01)
 
 
