@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.6.0](https://github.com/Kll7Ordin/kestl/compare/v2.5.2...v2.6.0) (2026-05-04)
+
+
+### Features
+
+* add bar chart toggle to YearView spending breakdown ([562322b](https://github.com/Kll7Ordin/kestl/commit/562322bf0fb217a6dcb4b10b89b671ee6ccf9d64))
+
 ## [2.5.2](https://github.com/Kll7Ordin/kestl/compare/v2.5.1...v2.5.2) (2026-05-04)
 
 
