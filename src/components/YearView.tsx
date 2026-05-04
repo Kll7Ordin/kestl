@@ -8,16 +8,18 @@ import {
   PointElement,
   LineElement,
   ArcElement,
+  BarElement,
   DoughnutController,
+  BarController,
   Filler,
   Title,
   Tooltip,
   Legend,
 } from 'chart.js';
-import { Line, Doughnut } from 'react-chartjs-2';
+import { Line, Doughnut, Bar } from 'react-chartjs-2';
 import { formatAmount } from '../utils/format';
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, ArcElement, DoughnutController, Filler, Title, Tooltip, Legend);
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, ArcElement, BarElement, DoughnutController, BarController, Filler, Title, Tooltip, Legend);
 
 function mostRecentCompletedMonth(): string {
   const d = new Date();
@@ -68,6 +70,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
   const [pieScope, setPieScope] = useState<'ytd' | 'month'>('ytd');
   const [piePeriod, setPiePeriod] = useState<string>(mostRecentCompletedMonth);
   const [pieGrouping, setPieGrouping] = useState<'group' | 'category'>('group');
+  const [breakdownChartType, setBreakdownChartType] = useState<'donut' | 'bar'>('donut');
   const chartRef = useRef(null);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const appData = useSyncExternalStore(subscribe, getData);
@@ -621,13 +624,17 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
           <button className={`btn btn-sm ${pieGrouping === 'group' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setPieGrouping('group')}>By Group</button>
           <button className={`btn btn-sm ${pieGrouping === 'category' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setPieGrouping('category')}>By Category</button>
         </div>
+        <div style={{ display: 'flex', gap: '0.25rem', marginLeft: 'auto' }}>
+          <button className={`btn btn-sm ${breakdownChartType === 'donut' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setBreakdownChartType('donut')}>Donut</button>
+          <button className={`btn btn-sm ${breakdownChartType === 'bar' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setBreakdownChartType('bar')}>Bar</button>
+        </div>
       </div>
 
       {pieChartData.labels.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', opacity: 0.5, padding: '2rem' }}>
           No spending data for this period.
         </div>
-      ) : (
+      ) : breakdownChartType === 'donut' ? (
         <div className="card">
           <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center' }}>
             <div style={{ width: 680, height: 680, flexShrink: 0, position: 'relative' }}>
@@ -699,6 +706,58 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
               );
             })()}
           </div>
+        </div>
+      ) : (
+        <div className="card">
+          <Bar
+            data={{
+              labels: pieChartData.labels,
+              datasets: [{
+                data: pieChartData.values,
+                backgroundColor: pieChartData.colors,
+                borderWidth: 0,
+                borderRadius: 4,
+              }],
+            }}
+            options={{
+              indexAxis: 'y' as const,
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  backgroundColor: darkMode ? '#252836' : '#fff',
+                  titleColor: darkMode ? '#e8ecf4' : '#1a2332',
+                  bodyColor: darkMode ? '#b0bdd0' : '#4a5568',
+                  borderColor: darkMode ? '#2e3347' : '#e5e7eb',
+                  borderWidth: 1,
+                  padding: 12,
+                  cornerRadius: 8,
+                  callbacks: {
+                    label: (ctx) => {
+                      const total = (ctx.dataset.data as number[]).reduce((s, v) => s + (v as number), 0);
+                      const pct = total > 0 ? Math.round(((ctx.parsed.x as number) / total) * 100) : 0;
+                      return ` $${formatAmount(ctx.parsed.x as number, 0)} (${pct}%)`;
+                    },
+                  },
+                },
+              },
+              scales: {
+                x: {
+                  grid: { color: darkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)' },
+                  ticks: {
+                    color: darkMode ? '#b0bdd0' : '#4a5568',
+                    callback: (v) => `$${formatAmount(v as number, 0)}`,
+                  },
+                },
+                y: {
+                  grid: { display: false },
+                  ticks: { color: darkMode ? '#b0bdd0' : '#4a5568', font: { size: 12 } },
+                },
+              },
+            }}
+            style={{ height: Math.max(300, pieChartData.labels.length * 36) }}
+          />
         </div>
       )}
     </div>
