@@ -68,6 +68,8 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [refundPrompts, setRefundPrompts] = useState<RefundCandidate[]>([]);
   const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
   const [editingCommentText, setEditingCommentText] = useState('');
+  const [editingStarNoteId, setEditingStarNoteId] = useState<number | null>(null);
+  const [editingStarNoteText, setEditingStarNoteText] = useState('');
   const [moveMonthTxn, setMoveMonthTxn] = useState<Transaction | null>(null);
   const [moveMonthYear, setMoveMonthYear] = useState('');
   const [moveMonthNum, setMoveMonthNum] = useState('');
@@ -104,6 +106,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [categoryFilter, setCategoryFilter] = useState<number | ''>('');
   const [instrumentFilter, setInstrumentFilter] = useState<string>('');
   const [offBudgetFilter, setOffBudgetFilter] = useState(false);
+  const [starredFilter, setStarredFilter] = useState(false);
   const navFilterApplied = useRef(false);
 
   // Apply nav filter from external navigation (e.g. clicking "Spent" in Budget view)
@@ -157,6 +160,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       return t.categoryId === categoryFilter;
     });
     if (instrumentFilter !== '') result = result.filter((t) => t.instrument === instrumentFilter);
+    if (starredFilter) result = result.filter((t) => t.starred);
     if (offBudgetFilter) {
       const budgetedCatIds = new Set(budgets.filter((b) => b.month === month).map((b) => b.categoryId));
       const incomeCatIds = new Set(categories.filter((c) => c.isIncome).map((c) => c.id));
@@ -179,7 +183,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       });
     }
     return result;
-  }, [allTransactions, monthFilter, month, catFilter, categoryFilter, instrumentFilter, offBudgetFilter, search, splitsMap, catMap, budgets]);
+  }, [allTransactions, monthFilter, month, catFilter, categoryFilter, instrumentFilter, starredFilter, offBudgetFilter, search, splitsMap, catMap, budgets]);
 
   // Suggestions scored against all uncategorized transactions — not filtered by visible txns,
   // so month/search filter changes don't retrigger batchGetGuessScores.
@@ -276,6 +280,24 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     });
     setEditingCommentId(null);
     setEditingCommentText('');
+  }
+
+  async function toggleStar(txn: Transaction) {
+    await updateTransaction(txn.id, { starred: !txn.starred });
+  }
+
+  function startEditStarNote(txn: Transaction) {
+    setEditingStarNoteId(txn.id);
+    setEditingStarNoteText(txn.starNote ?? '');
+  }
+
+  async function saveStarNote() {
+    if (editingStarNoteId === null) return;
+    await updateTransaction(editingStarNoteId, {
+      starNote: editingStarNoteText.trim() || null,
+    });
+    setEditingStarNoteId(null);
+    setEditingStarNoteText('');
   }
 
   async function addManualTransaction() {
@@ -413,6 +435,13 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
           onClick={() => { setCatFilter(catFilter === 'uncategorized' ? 'all' : 'uncategorized'); setCategoryFilter(''); }}
         >
           Uncategorized
+        </button>
+        <button
+          className={`btn ${starredFilter ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ fontSize: '0.875rem', padding: '0.3rem 0.6rem' }}
+          onClick={() => setStarredFilter(!starredFilter)}
+        >
+          ★ Starred
         </button>
         <SearchableSelect
           options={categoryOptions}
@@ -608,6 +637,24 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                     )}
                   </td>
                   <td className="txn-action-cell">
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => toggleStar(t)}
+                      title={t.starred ? 'Unstar transaction' : 'Star transaction'}
+                      style={{ color: t.starred ? '#fbbf24' : undefined, fontWeight: t.starred ? 'bold' : 'normal' }}
+                    >
+                      {t.starred ? '★' : '☆'}
+                    </button>
+                    {t.starred && (
+                      <button
+                        className={`btn btn-sm ${t.starNote ? 'btn-warning' : 'btn-ghost'}`}
+                        onClick={() => startEditStarNote(t)}
+                        title={t.starNote ? 'View/edit star note' : 'Add star note'}
+                        style={{ fontWeight: t.starNote ? 'bold' : 'normal' }}
+                      >
+                        🏷
+                      </button>
+                    )}
                     <button className="btn btn-ghost btn-sm" onClick={() => openRuleModal(t)} title="Create rule">
                       Create Rule
                     </button>
@@ -817,6 +864,43 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
               <div style={{ display: 'flex', gap: '0.5rem' }}>
                 <button className="btn btn-ghost" onClick={() => setEditingCommentId(null)}>Cancel</button>
                 <button className="btn btn-primary" onClick={saveComment}>Save</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingStarNoteId !== null && (
+        <div className="modal-overlay" onClick={() => setEditingStarNoteId(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h3>{editingStarNoteText.trim() ? 'View / Edit Star Note' : 'Add Star Note'}</h3>
+            <div className="field">
+              <textarea
+                value={editingStarNoteText}
+                onChange={(e) => setEditingStarNoteText(e.target.value)}
+                placeholder="Enter star note..."
+                rows={3}
+                style={{ resize: 'vertical', width: '100%' }}
+                autoFocus
+              />
+            </div>
+            <div className="modal-actions" style={{ justifyContent: 'space-between' }}>
+              <div>
+                {editingStarNoteText.trim() && (
+                  <button
+                    className="btn btn-danger btn-sm"
+                    onClick={async () => {
+                      await updateTransaction(editingStarNoteId, { starNote: null });
+                      setEditingStarNoteId(null);
+                    }}
+                  >
+                    Delete
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem' }}>
+                <button className="btn btn-ghost" onClick={() => setEditingStarNoteId(null)}>Cancel</button>
+                <button className="btn btn-primary" onClick={saveStarNote}>Save</button>
               </div>
             </div>
           </div>

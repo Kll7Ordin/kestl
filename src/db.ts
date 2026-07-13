@@ -98,6 +98,8 @@ export interface Transaction {
   linkedTransactionId: number | null;
   ignoreInBudget: boolean;
   comment: string | null;
+  starred?: boolean;
+  starNote?: string | null;
 }
 
 export interface TransactionSplit {
