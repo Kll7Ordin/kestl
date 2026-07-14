@@ -254,10 +254,11 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
       }
     }
 
-    // Restrict to categories that appear in the most recent completed month's budget
-    const recentMonth = monthsOfYear(year).filter((m) => m < todayMonth).at(-1);
-    const budgetedCatIds = recentMonth
-      ? new Set(allBudgets.filter((b) => b.month === recentMonth).map((b) => b.categoryId))
+    // Restrict to categories budgeted in any month actually being summed (the same
+    // `months` window used above), so YTD/12M aggregates aren't filtered down to a
+    // single arbitrary reference month's budget.
+    const budgetedCatIds = monthSet.size > 0
+      ? new Set(allBudgets.filter((b) => monthSet.has(b.month)).map((b) => b.categoryId))
       : null;
     if (budgetedCatIds) {
       for (const catId of [...spendByCat.keys()]) {
