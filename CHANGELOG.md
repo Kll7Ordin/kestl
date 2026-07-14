@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.1](https://github.com/Kll7Ordin/kestl/compare/v2.7.0...v2.7.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* spending breakdown filtering out valid categories in Month and 12M/YTD views ([4558be4](https://github.com/Kll7Ordin/kestl/commit/4558be4736f171afde7303b1594fafe5f4abf508))
+
 ## [2.7.0](https://github.com/Kll7Ordin/kestl/compare/v2.6.0...v2.7.0) (2026-07-14)
 
 
