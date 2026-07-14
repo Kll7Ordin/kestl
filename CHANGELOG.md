@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.7.0](https://github.com/Kll7Ordin/kestl/compare/v2.6.0...v2.7.0) (2026-07-14)
+
+
+### Features
+
+* star transactions with optional note and filter ([6dd9d68](https://github.com/Kll7Ordin/kestl/commit/6dd9d68bcce9b4d3ec530a9307639d82d5f65d5b))
+
 ## [2.6.0](https://github.com/Kll7Ordin/kestl/compare/v2.5.2...v2.6.0) (2026-05-04)
 
 
