@@ -1,6 +1,6 @@
 # State ownership
 
-All application state lives in a single `AppData` object inside `src/db.ts`. There is no React context, Zustand, or Redux. Components subscribe via `useSyncExternalStore(subscribe, getData)` and re-render when `persist()` creates a new object reference.
+All application state lives in a single `AppData` object inside `src/db.ts`. There is no React context, Zustand, or Redux. Components subscribe via `useSyncExternalStore(subscribe, getData)` and re-render when `persist()` creates new object and array references (the disk write itself is debounced in the background).
 
 ## Ownership map
 

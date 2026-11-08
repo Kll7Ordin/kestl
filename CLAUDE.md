@@ -35,10 +35,7 @@ release-please reads these prefixes to build the CHANGELOG and decide the versio
 
 ## Release flow
 
-1. Commits land on `main` → release-please action runs
-2. release-please opens/updates a "Release PR" that bumps versions and updates `CHANGELOG.md`
-3. When you merge the Release PR → release-please creates a `v*` tag
-4. The `v*` tag triggers the **release.yml** workflow which builds the Tauri app for Windows + Linux and publishes a GitHub Release with installers attached
+See `.github/workflows/release-please.yml` and `release.yml` for the full pipeline.
 
 ---
 
@@ -108,35 +105,7 @@ src-tauri/src/
 
 ## Tauri IPC command surface
 
-All commands are in `src-tauri/src/lib.rs`. Invoked from the frontend with `invoke('command_name', { ...args })`.
-
-### File management
-
-| Command | Signature | What it does |
-|---|---|---|
-| `get_last_file_path` | `() → Option<String>` | Returns path held in `AppState.file_path` (loaded from config at startup) |
-| `set_file_path` | `(path: String)` | Writes `~/.config/budget-app/config.json` and updates `AppState`; call after open/create |
-| `load_data` | `(path: String) → Result<String>` | Reads entire file as string (plain JSON or encrypted blob) |
-| `save_data` | `(path: String, data: String) → Result<()>` | Writes string to file directly (no temp-file); called by `persist()` in `db.ts` |
-| `file_exists` | `(path: String) → bool` | Path existence check |
-| `list_dir_files` | `(dir: String, ext: String) → Vec<FileInfo>` | Lists files in `dir` filtered by extension; returns `{path, modified_secs}` — used by FileSetup to show recent files |
-| `save_bytes` | `(path: String, bytes: Vec<u8>) → Result<()>` | Raw binary write |
-| `save_base64` | `(path: String, data: String) → Result<()>` | Base64-decode then write — used for exporting non-text assets |
-| `get_home_dir` | `() → String` | Returns home directory |
-
-### Ollama management
-
-| Command | Signature | What it does |
-|---|---|---|
-| `find_ollama` | `() → Option<String>` | Checks `~/.local/share/budget-app/bin/ollama`, then `which ollama`; returns path or null |
-| `install_ollama` | `(app: AppHandle) → Result<String>` (async) | Linux only: downloads latest Ollama `.tar.zst` from GitHub, extracts to `~/.local/share/budget-app/`, emits `ollama_progress` events with `{status, percent}` |
-| `start_ollama` | `(binary_path: String) → Result<()>` | Spawns `ollama serve` as a detached child process |
-
-### Search
-
-| Command | Signature | What it does |
-|---|---|---|
-| `search_ddg` | `(query: String) → Result<Vec<DdgResult>>` (async) | Queries DuckDuckGo HTML endpoint; parses up to 6 `{title, snippet}` results — used by TransactionLookup |
+All commands are in `src-tauri/src/lib.rs` (388 lines — read it directly for signatures). Invoked from the frontend with `invoke('command_name', { ...args })`. Covers file management, Ollama install/start, and DuckDuckGo search (`search_ddg`, used by TransactionLookup).
 
 **Config file path:** `~/.config/budget-app/config.json` — stores only `{ "last_file": "/path/to/file.budget" }`.
 
@@ -146,84 +115,54 @@ All commands are in `src-tauri/src/lib.rs`. Invoked from the frontend with `invo
 
 ### Where budget data lives in memory
 
-`src/db.ts` is a module-level singleton — not React context, not Zustand. The entire app state is one mutable object:
+`src/db.ts` is a module-level singleton — not React context, not Zustand. The entire app state (`data`, `filePath`, `sessionPassword`) is one mutable object declared at `db.ts:255`.
 
-```typescript
-// db.ts:255
-let data: AppData = emptyData();
-let filePath: string | null = null;
-let sessionPassword: string | null = null; // never written to disk
-```
-
-React components read state via `useSyncExternalStore(subscribe, getData)`. `persist()` creates a new object reference (`data = { ...data }`) after every write so the hook detects the change and re-renders.
+React components read state via `useSyncExternalStore(subscribe, getData)`. `persist()` gives `data` **and every top-level array** a new reference (`refreshRefs()`), so `useMemo`/`WeakMap` caches keyed on `data.transactions` etc. invalidate correctly. Inside `db.ts` always read `data.x` after an `await`, never a captured local array.
 
 ### `AppData` interface (db.ts:198)
 
-```typescript
-interface AppData {
-  nextId: number;                        // monotonic ID generator for all entities
-  categories: Category[];
-  categoryRules: CategoryRule[];         // auto-categorization rules (last-match wins)
-  budgetGroups: BudgetGroup[];           // named groups (Fixed, Variable, etc.)
-  budgets: Budget[];                     // monthly spend targets per category
-  transactions: Transaction[];
-  transactionSplits: TransactionSplit[]; // split portions for split transactions
-  savingsBuckets: SavingsBucket[];
-  savingsEntries: SavingsEntry[];
-  savingsSchedules: SavingsSchedule[];   // deprecated recurring savings
-  recurringTemplates: RecurringTemplate[];
-  splitTemplates?: SplitTemplate[];      // named split patterns (reusable)
-  amazonOrders?: AmazonOrder[];          // product metadata matched to transactions
-  aiSettings?: AISettings;              // Ollama URL + model name
-  customParsers?: CustomParser[];        // user-defined CSV parsers (evaled JS)
-  aiCategoryFeedback?: AICategoryFeedback[]; // LLM suggestion training data
-  experimentalBudgets?: ExperimentalBudget[];
-  completedMigrations?: string[];        // migration IDs run by startupCleanup
-  colorThresholds?: ColorThresholds;
-  mortgage?: MortgageConfig;
-  mortgageLedger?: MortgageLedgerEntry[];
-}
-```
+Field names are self-descriptive; read the interface directly at `db.ts:198` rather than mirroring it here. See "Adding a new persistent field to AppData" below for the three-step pattern when extending it.
 
 ### Persistence pattern
 
 Every mutation function in `db.ts` follows:
 ```typescript
 export async function addTransaction(txn: Omit<Transaction, 'id'>): Promise<number> {
-  pushUndoSnapshot();          // optional — only on destructive ops
+  pushUndoSnapshot('Add transaction');   // one snapshot per user action, with a label
   const id = nextId();
   data.transactions.push({ id, ...txn });
-  await persist();             // serialize → (encrypt?) → invoke('save_data')
+  await persist();                       // updates the UI now; the disk write is debounced
   return id;
 }
 ```
 
-`persist()` (db.ts:297):
-1. `JSON.stringify(data, null, 2)` — 2-space, human-readable
-2. If `sessionPassword`: `await encryptData(json, password)` → AES-256-GCM blob
-3. `invoke('save_data', { path: filePath, data: fileContent })`
-4. `data = { ...data }` — new reference for React
-5. Notify all listeners
+`persist()` only refreshes array references, notifies listeners and calls `scheduleSave()` (400 ms debounce). The background save (`runSave`):
+1. `JSON.stringify` (pretty for plaintext, compact before encrypting)
+2. If encrypted: `encryptWithKey(json, sessionKey)` — the PBKDF2 key is derived **once per session**, each save uses a fresh IV
+3. `invoke('save_data', { path, data, expectedMtime })` — atomic (temp file + rename) and conflict-checked; a changed mtime rejects with `CONFLICT`
+4. Status (`idle | pending | saving | error | conflict`) is exposed via `getSaveStatus()` / `subscribeSaveStatus()`
+
+Call `await flushSave()` when something must be on disk now (switching files, backups, window close). Saves are serialized; errors retry with backoff.
 
 ### Load / startup
 
 `loadFromFile()` (db.ts:320):
-1. `invoke('load_data', { path })` reads raw string
+1. `await flushSave()` for the file being left, then `invoke('load_data', { path })` reads the raw string
 2. Detect encrypted (`isEncryptedFile` checks for `budgetEncV1` key)
-3. Decrypt with password or use raw JSON
+3. Decrypt with `decryptWithPassword` (keeps the session key; v1 files are re-saved once as v2)
 4. `data = { ...emptyData(), ...parsed }` — missing fields get defaults (handles old file formats)
 5. Normalize missing transaction fields (`instrument`, `descriptor`, etc.)
-6. `startupCleanup()` (db.ts:401) runs migrations: fixes stale links, bidirectional refund flags, deduplicates bank_csv overlaps, backfills category colors, applies split rules retroactively
+6. `runStartupJobs()` (`src/startup.ts`, called by App and after switching files) runs `startupCleanup()` → `processRecurringTemplates()` → `processSchedules()` → `flushSave()` → `runBackup('startup')`, strictly in sequence. Data fixes in `startupCleanup()` are one-time migrations keyed in `completedMigrations`.
 
 ### Undo
 
-Three JSON snapshots in `_undoStack: string[]`. Call `pushUndoSnapshot()` before any destructive mutation. `undo()` pops, re-parses, re-persists.
+`_undoStack` holds up to 10 `{ label, snap }` entries. **One user action = one snapshot**: every user-initiated mutator calls `pushUndoSnapshot('<label>')`; multi-step actions wrap themselves in `withUndo(label, fn)` (one snapshot, nested ones suppressed). Background jobs use `withoutUndo`. Loading another file clears the stack. `undo()` pops, restores and `persist()`s.
 
 ### Encryption
 
-`utils/crypto.ts` — AES-256-GCM with PBKDF2-SHA256 (100,000 iterations). On-disk format:
+`utils/crypto.ts` — AES-256-GCM with PBKDF2-SHA256 (600,000 iterations for v2; v1 files used 100,000 and are upgraded on first save). On-disk format:
 ```json
-{ "budgetEncV1": 1, "salt": "<base64>", "iv": "<base64>", "data": "<base64 ciphertext>" }
+{ "budgetEncV1": 2, "kdf": "PBKDF2-SHA256", "iterations": 600000, "salt": "<base64>", "iv": "<base64>", "data": "<base64 ciphertext>" }
 ```
 `sessionPassword` lives only in memory and is never written anywhere.
 
@@ -231,98 +170,7 @@ Three JSON snapshots in `_undoStack: string[]`. Call `pushUndoSnapshot()` before
 
 ## Key data flows
 
-### CSV import pipeline
-
-```mermaid
-flowchart TD
-    A[User drops CSV file] --> B{Built-in parser match?}
-    B -- yes --> C[parseBankCsv — parsers/csv.ts]
-    B -- no --> D[Try each CustomParser\nlogic in ImportView.tsx:230]
-    C --> E[Transaction array\ncategoryId=null, no id]
-    D --> E
-    E --> F[categorizeTransactionsInPlace\nlogic/categorize.ts:156]
-    F --> G[Apply categoryRules in order\nlast match wins]
-    G --> H{Rule has splits?}
-    H -- yes --> I[Record SplitAction\ndon't set categoryId]
-    H -- no --> J[Set txn.categoryId]
-    I --> K[detectDuplicates\nlogic/duplicates.ts:55]
-    J --> K
-    K --> L{Any duplicates?}
-    L -- yes --> M[User reviews duplicates\nImportView duplicate dialog]
-    L -- no --> N[bulkAddTransactions\ndb.ts]
-    M --> N
-    N --> O[Assign IDs, append to data.transactions]
-    O --> P[setSplits for SplitAction entries]
-    P --> Q{Source type?}
-    Q -- PayPal --> R[matchPaypalTransactions\nlogic/matching.ts]
-    Q -- credits/ignoreInBudget --> S[findRefundCandidates\nlogic/refunds.ts]
-    Q -- bank_csv --> T[persist to disk]
-    R --> T
-    S --> T
-```
-
-### Category suggestion scoring tiers
-
-```mermaid
-flowchart TD
-    A[descriptor string] --> B[normalize: trim + lowercase + collapse whitespace]
-    B --> C[stripIds: remove 6+ digit seqs, #ref tokens]
-    C --> D[Scan all existing categorized transactions]
-
-    D --> E{Tier 1: exact normalized match?}
-    E -- yes --> F[+40 pts to that category]
-    E -- no --> G{Tier 2: stripped match\nstripped.length > 2?}
-    G -- yes --> H[+25 pts]
-    G -- no --> I{Tier 3: Dice trigram\nsimilarity ≥ 0.6?}
-    I -- yes --> J[+10 pts]
-    I -- no --> K{Tier 4: shared keywords\nfilter noise words\nlen ≥ 3?}
-    K -- yes --> L[+1 pt per shared keyword]
-
-    F --> M[Accumulate scores per categoryId]
-    H --> M
-    J --> M
-    L --> M
-    M --> N[Return category with highest total score]
-```
-
-Implemented in `logic/categorize.ts:56`. The batch variant (`batchGetGuessScores`, line 108) pre-processes the corpus once for use when scoring many transactions simultaneously (used in TransactionView and SettingsView to avoid redundant work).
-
-### Save / load
-
-```mermaid
-sequenceDiagram
-    participant UI as React component
-    participant DB as db.ts
-    participant Crypto as utils/crypto.ts
-    participant Tauri as Rust (lib.rs)
-    participant Disk as filesystem
-
-    UI->>DB: addTransaction() / updateX() / deleteX()
-    DB->>DB: mutate data object
-    DB->>DB: JSON.stringify(data, null, 2)
-    alt encrypted
-        DB->>Crypto: encryptData(json, sessionPassword)
-        Crypto-->>DB: AES-GCM blob string
-    end
-    DB->>Tauri: invoke('save_data', {path, data})
-    Tauri->>Disk: fs::write(path, data)
-    DB->>DB: data = {...data}  // new ref for React
-    DB->>UI: notify listeners → re-render
-
-    Note over UI,Disk: Load path
-    UI->>DB: loadFromFile(path, password?)
-    DB->>Tauri: invoke('load_data', {path})
-    Tauri->>Disk: fs::read_to_string(path)
-    Disk-->>Tauri: raw string
-    Tauri-->>DB: raw string
-    alt encrypted file
-        DB->>Crypto: decryptData(raw, password)
-        Crypto-->>DB: json string
-    end
-    DB->>DB: JSON.parse → merge with emptyData()
-    DB->>DB: startupCleanup() migrations
-    DB->>UI: notify listeners → re-render
-```
+See the `kestl-data-flows` skill for diagrams of the CSV import pipeline, category suggestion scoring tiers, and the save/load cycle.
 
 ---
 
@@ -343,11 +191,7 @@ sequenceDiagram
 
 ### Where to add a new built-in parser
 
-1. Create `src/parsers/mybank.ts` exporting `parseMyBankCsv(text: string, filename: string): Omit<Transaction, 'id'>[]`
-2. Follow the pattern in `src/parsers/csv.ts`: detect by filename, skip pending rows, normalize descriptor, set `ignoreInBudget` based on credit/debit type
-3. Wire it into `ImportView.tsx` after the `parseBankCsv()` call (around line 230) — return early if it produces results
-
-Custom (user-defined) parsers live in `AppData.customParsers` as evaled TypeScript function bodies. The UI for creating them is `ParserGenerator.tsx`. Execution happens in `ImportView.tsx` via `executeCustomParser()`.
+See the `kestl-extension-points` skill.
 
 ### Where rules vs. scoring live
 
@@ -370,18 +214,18 @@ Custom (user-defined) parsers live in `AppData.customParsers` as evaled TypeScri
 - All rules iterate in array order; **last match wins** (allows override rules at the end)
 - Rules with `splits` (≥2 items) record a `SplitAction` instead of setting `categoryId`
 
-### Adding a new persistent field to AppData
+### Adding a new persistent field to AppData, or a new Tauri command
 
-1. Add the field (mark optional `?` for backward compatibility with old files) to the `AppData` interface in `db.ts:198`
-2. Add a default in `emptyData()` at `db.ts:237` if the field needs a non-undefined fallback
-3. If migration of existing files is needed, add a migration block in `startupCleanup()` at `db.ts:401` and push a migration ID to `completedMigrations` so it only runs once
-
-### Adding a new Tauri command
-
-1. Write an `#[tauri::command]` function in `src-tauri/src/lib.rs`
-2. Register it in the `invoke_handler!(...)` macro at line 371
-3. Call it from the frontend with `invoke('command_name', { ...args })` from `@tauri-apps/api/core`
+See the `kestl-extension-points` skill.
 
 ### Split transactions
 
-A split transaction has `categoryId = null` at the parent level; the budget amounts come from `transactionSplits` rows. `TransactionSplit.txnDate` is an optional override — if set, that split portion counts toward a different month than the parent transaction. This is used for mortgage principal vs. interest splits that cross month boundaries.
+**If a transaction has splits, the splits are used for totals and the parent `categoryId` is ignored.** Use `isCategorized(t, splitsIndex)` (`logic/spend.ts`) — a transaction is categorized if it has a category OR splits. Rule runs (`recategorizeAll`, `runRuleOnHistory`) skip transactions that already have splits. Split amounts are rounded to cents and any remainder goes to the last split (`resolveSplits`). A split transaction has `categoryId = null` at the parent level; the budget amounts come from `transactionSplits` rows. `TransactionSplit.txnDate` is an optional override — if set, that split portion counts toward a different month than the parent transaction. This is used for mortgage principal vs. interest splits that cross month boundaries.
+
+### Transaction kinds
+
+`ignoreInBudget` means **credit** (money in), despite its name — use `isCredit(t)` / `isPaypalLinked(t)` from `logic/txnKind.ts` for reads. `isTransfer` marks movement between your own accounts: it is excluded from every aggregate, suggestion corpus and savings balance. All "spent per category per month" math lives in `logic/spend.ts` (`getMonthAggregates`, cached per array reference); don't re-implement it.
+
+### Categories
+
+Categories in use can't be deleted — archive them (`setCategoryArchived`, hidden from pickers via `!c.archived`) or merge them (`mergeCategories` adds budgets and re-points every reference).
