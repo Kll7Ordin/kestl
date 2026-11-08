@@ -1,4 +1,5 @@
-import { getData, addCategoryRule, persistData, setSplits, type Transaction, type CategoryRule, type SplitRuleItem } from '../db';
+import { getData, addCategoryRule, persistData, setSplitsBulk, withUndo, type Transaction, type CategoryRule, type SplitRuleItem } from '../db';
+import { isCredit } from './txnKind';
 
 export interface RunRuleOptions {
   ruleId: number;
@@ -45,15 +46,25 @@ const NOISE_WORDS = new Set([
  * Such words are too generic to be useful for Tier 4 keyword matching and
  * are excluded dynamically in addition to the static NOISE_WORDS list.
  */
+function archivedCategoryIds(): Set<number> {
+  return new Set(getData().categories.filter((c) => c.archived).map((c) => c.id));
+}
+
+/** Corpus rows: categorized debits, excluding transfers and archived categories. */
+function usableForSuggestions(t: Transaction, archived: Set<number>): boolean {
+  return t.categoryId != null && !isCredit(t) && !t.isTransfer && !archived.has(t.categoryId);
+}
+
 function buildHighSpreadWords(transactions: Transaction[]): Set<string> {
+  const archived = archivedCategoryIds();
   const wordToCategories = new Map<string, Set<number>>();
   for (const t of transactions) {
-    if (t.categoryId == null || t.ignoreInBudget) continue;
+    if (!usableForSuggestions(t, archived)) continue;
     const words = stripIds(t.descriptor).split(/\s+/).filter((w) => w.length >= 3 && !NOISE_WORDS.has(w));
     for (const w of words) {
       let cats = wordToCategories.get(w);
       if (!cats) { cats = new Set(); wordToCategories.set(w, cats); }
-      cats.add(t.categoryId);
+      cats.add(t.categoryId!);
     }
   }
   const result = new Set<string>();
@@ -97,8 +108,9 @@ function computeGuessScores(descriptor: string, transactions: Transaction[]): Ma
     scores.set(catId, (scores.get(catId) ?? 0) + pts);
   };
 
+  const archived = archivedCategoryIds();
   for (const t of transactions) {
-    if (t.categoryId == null || t.ignoreInBudget) continue;
+    if (!usableForSuggestions(t, archived)) continue;
     const tNorm = normalize(t.descriptor);
     const tStripped = stripIds(t.descriptor);
 
@@ -129,16 +141,16 @@ export function getGuessScores(descriptor: string, transactions: Transaction[]):
 }
 
 interface CorpusEntry {
-  categoryId: number;
   norm: string;
   stripped: string;
   words: string[];
+  cats: Map<number, number>; // categoryId → how many corpus transactions share this descriptor
 }
 
 /**
- * Batch variant: preprocess the corpus once, then score multiple descriptors against it.
- * Use this when computing suggestions for many transactions at once to avoid redundant
- * normalize/stripIds work on the corpus for every query descriptor.
+ * Batch variant: preprocess the corpus once (grouped by unique descriptor), then score many
+ * descriptors against it. Scores are identical to scoring each corpus transaction one by one:
+ * every corpus row lands in exactly one tier, so identical descriptors just contribute `count` times.
  */
 export function batchGetGuessScores(
   queries: { id: number; descriptor: string }[],
@@ -147,33 +159,56 @@ export function batchGetGuessScores(
   const highSpread = buildHighSpreadWords(transactions);
   const isNoise = (w: string) => NOISE_WORDS.has(w) || highSpread.has(w);
 
-  const corpus: CorpusEntry[] = [];
+  const archived = archivedCategoryIds();
+  const unique = new Map<string, CorpusEntry>();
   for (const t of transactions) {
-    if (t.categoryId == null || t.ignoreInBudget) continue;
+    if (!usableForSuggestions(t, archived) || t.categoryId == null) continue;
+    const norm = normalize(t.descriptor);
     const stripped = stripIds(t.descriptor);
-    corpus.push({
-      categoryId: t.categoryId,
-      norm: normalize(t.descriptor),
-      stripped,
-      words: stripped.split(/\s+/).filter((w) => w.length >= 3 && !isNoise(w)),
-    });
+    const key = `${norm}\u0000${stripped}`;
+    let e = unique.get(key);
+    if (!e) {
+      e = { norm, stripped, words: stripped.split(/\s+/).filter((w) => w.length >= 3 && !isNoise(w)), cats: new Map() };
+      unique.set(key, e);
+    }
+    e.cats.set(t.categoryId, (e.cats.get(t.categoryId) ?? 0) + 1);
   }
+  const corpus = [...unique.values()];
+  const byNorm = new Map<string, CorpusEntry[]>();
+  for (const e of corpus) {
+    const arr = byNorm.get(e.norm);
+    if (arr) arr.push(e); else byNorm.set(e.norm, [e]);
+  }
+
+  const memo = new Map<string, Map<number, number>>();
+  const scoreOne = (descriptor: string): Map<number, number> => {
+    const norm = normalize(descriptor);
+    const stripped = stripIds(descriptor);
+    const memoKey = `${norm}\u0000${stripped}`;
+    const hit = memo.get(memoKey);
+    if (hit) return hit;
+    const words = stripped.split(/\s+/).filter((w) => w.length >= 3 && !isNoise(w));
+    const scores = new Map<number, number>();
+    const add = (catId: number, pts: number) => scores.set(catId, (scores.get(catId) ?? 0) + pts);
+
+    const exactSet = new Set(byNorm.get(norm) ?? []);
+    for (const e of exactSet) for (const [cat, n] of e.cats) add(cat, 40 * n);
+
+    for (const e of corpus) {
+      if (exactSet.has(e)) continue;
+      if (e.stripped === stripped && stripped.length > 2) { for (const [cat, n] of e.cats) add(cat, 25 * n); continue; }
+      if (diceSimilarity(norm, e.norm) >= 0.6) { for (const [cat, n] of e.cats) add(cat, 10 * n); continue; }
+      let shared = 0;
+      for (const w of words) if (e.words.includes(w)) shared++;
+      if (shared > 0) for (const [cat, n] of e.cats) add(cat, shared * n);
+    }
+    memo.set(memoKey, scores);
+    return scores;
+  };
 
   const result = new Map<number, Map<number, number>>();
   for (const { id, descriptor } of queries) {
-    const norm = normalize(descriptor);
-    const stripped = stripIds(descriptor);
-    const words = stripped.split(/\s+/).filter((w) => w.length >= 3 && !isNoise(w));
-    const scores = new Map<number, number>();
-    for (const c of corpus) {
-      const add = (pts: number) => scores.set(c.categoryId, (scores.get(c.categoryId) ?? 0) + pts);
-      if (c.norm === norm) { add(40); continue; }
-      if (c.stripped === stripped && stripped.length > 2) { add(25); continue; }
-      const sim = diceSimilarity(norm, c.norm);
-      if (sim >= 0.6) { add(10); continue; }
-      const shared = words.filter((w) => c.words.includes(w)).length;
-      if (shared > 0) add(shared);
-    }
+    const scores = scoreOne(descriptor);
     if (scores.size > 0) result.set(id, scores);
   }
   return result;
@@ -184,11 +219,26 @@ export interface SplitAction {
   splits: Array<{ categoryId: number; amount: number }>;
 }
 
-function resolveSplits(items: SplitRuleItem[], txnAmount: number): Array<{ categoryId: number; amount: number }> {
-  return items.map((s) => ({
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * Turn rule split items into concrete amounts. Each amount is rounded to cents, and any
+ * remainder (stray cents from percentages, or fixed-dollar splits applied to a transaction of a
+ * different amount) goes to the LAST split so the parts always sum to the transaction.
+ */
+export function resolveSplits(items: SplitRuleItem[], txnAmount: number): Array<{ categoryId: number; amount: number }> {
+  const out = items.map((s) => ({
     categoryId: s.categoryId,
-    amount: s.percent != null ? txnAmount * s.percent / 100 : (s.amount ?? 0),
+    amount: round2(s.percent != null ? txnAmount * s.percent / 100 : (s.amount ?? 0)),
   }));
+  if (out.length === 0) return out;
+  const diff = round2(txnAmount - out.reduce((sum, x) => sum + x.amount, 0));
+  if (Math.abs(diff) >= 0.005) out[out.length - 1].amount = round2(out[out.length - 1].amount + diff);
+  return out;
+}
+
+function splitTxnIds(): Set<number> {
+  return new Set(getData().transactionSplits.map((s) => s.transactionId));
 }
 
 export function categorizeTransactionsInPlace(txns: Omit<Transaction, 'id'>[]): SplitAction[] {
@@ -197,7 +247,7 @@ export function categorizeTransactionsInPlace(txns: Omit<Transaction, 'id'>[]): 
 
   for (let i = 0; i < txns.length; i++) {
     const txn = txns[i];
-    if (txn.categoryId) continue;
+    if (txn.categoryId || txn.isTransfer) continue;
     const norm = normalize(txn.descriptor);
     const amountMatch = (r: CategoryRule) =>
       r.amountMatch == null || Math.abs((r.amountMatch ?? 0) - txn.amount) < 0.01;
@@ -212,6 +262,10 @@ export function categorizeTransactionsInPlace(txns: Omit<Transaction, 'id'>[]): 
     }
     if (!lastMatch) continue;
 
+    if (lastMatch.markTransfer) {
+      txn.isTransfer = true;
+      continue;
+    }
     if (lastMatch.splits && lastMatch.splits.length >= 2) {
       splitActions.push({ txnIndex: i, splits: resolveSplits(lastMatch.splits, txn.amount) });
     } else {
@@ -223,31 +277,40 @@ export function categorizeTransactionsInPlace(txns: Omit<Transaction, 'id'>[]): 
 }
 
 export async function recategorizeAll(): Promise<number> {
-  const { transactions, categoryRules } = getData();
+  return withUndo('Re-run category rules', async () => {
+    const { transactions, categoryRules } = getData();
+    const hasSplits = splitTxnIds();
 
-  let count = 0;
-  const amountMatch = (r: CategoryRule, txn: Transaction) =>
-    r.amountMatch == null || Math.abs((r.amountMatch ?? 0) - txn.amount) < 0.01;
-  for (const txn of transactions) {
-    if (txn.categoryId !== null) continue;
-    const norm = normalize(txn.descriptor);
-    // Last rule wins
-    let matched: CategoryRule | undefined;
-    for (const r of categoryRules) {
-      const descMatch = r.matchType === 'exact'
-        ? normalize(r.pattern) === norm
-        : norm.includes(normalize(r.pattern));
-      if (descMatch && amountMatch(r, txn)) matched = r;
-    }
-    if (matched) {
-      if (!matched.splits || matched.splits.length < 2) {
-        txn.categoryId = matched.categoryId;
+    let count = 0;
+    const splitEntries: { transactionId: number; splits: Array<{ categoryId: number; amount: number }> }[] = [];
+    const amountMatch = (r: CategoryRule, txn: Transaction) =>
+      r.amountMatch == null || Math.abs((r.amountMatch ?? 0) - txn.amount) < 0.01;
+    for (const txn of transactions) {
+      if (txn.categoryId !== null || txn.isTransfer || hasSplits.has(txn.id)) continue;
+      const norm = normalize(txn.descriptor);
+      // Last rule wins
+      let matched: CategoryRule | undefined;
+      for (const r of categoryRules) {
+        const descMatch = r.matchType === 'exact'
+          ? normalize(r.pattern) === norm
+          : norm.includes(normalize(r.pattern));
+        if (descMatch && amountMatch(r, txn)) matched = r;
       }
-      count++;
+      if (matched) {
+        if (matched.markTransfer) {
+          txn.isTransfer = true;
+        } else if (matched.splits && matched.splits.length >= 2) {
+          splitEntries.push({ transactionId: txn.id, splits: resolveSplits(matched.splits, txn.amount) });
+        } else {
+          txn.categoryId = matched.categoryId;
+        }
+        count++;
+      }
     }
-  }
-  if (count > 0) await persistData();
-  return count;
+    if (splitEntries.length > 0) await setSplitsBulk(splitEntries);
+    if (count > 0) await persistData();
+    return count;
+  });
 }
 
 export async function bulkCategorizeByDescriptor(
@@ -256,21 +319,43 @@ export async function bulkCategorizeByDescriptor(
   matchType: 'exact' | 'contains',
   amount?: number | null,
 ): Promise<number> {
-  const { transactions } = getData();
-  const norm = normalize(pattern);
-  let count = 0;
-  for (const txn of transactions) {
-    const txnNorm = normalize(txn.descriptor);
-    const descMatch = matchType === 'exact' ? txnNorm === norm : txnNorm.includes(norm);
-    const amountOk = amount == null || Math.abs(amount - txn.amount) < 0.01;
-    const isMatch = descMatch && amountOk;
-    if (isMatch) {
-      txn.categoryId = categoryId;
-      count++;
+  return withUndo('Categorize by descriptor', async () => {
+    const { transactions } = getData();
+    const norm = normalize(pattern);
+    let count = 0;
+    for (const txn of transactions) {
+      const txnNorm = normalize(txn.descriptor);
+      const descMatch = matchType === 'exact' ? txnNorm === norm : txnNorm.includes(norm);
+      const amountOk = amount == null || Math.abs(amount - txn.amount) < 0.01;
+      const isMatch = descMatch && amountOk;
+      if (isMatch) {
+        txn.categoryId = categoryId;
+        count++;
+      }
     }
-  }
-  if (count > 0) await persistData();
-  return count;
+    if (count > 0) await persistData();
+    return count;
+  });
+}
+
+export async function bulkMarkTransferByDescriptor(
+  pattern: string,
+  matchType: 'exact' | 'contains',
+  amount?: number | null,
+): Promise<number> {
+  return withUndo('Mark as transfer', async () => {
+    const { transactions } = getData();
+    const norm = normalize(pattern);
+    let count = 0;
+    for (const txn of transactions) {
+      const txnNorm = normalize(txn.descriptor);
+      const descMatch = matchType === 'exact' ? txnNorm === norm : txnNorm.includes(norm);
+      const amountOk = amount == null || Math.abs(amount - txn.amount) < 0.01;
+      if (descMatch && amountOk && !txn.isTransfer) { txn.isTransfer = true; count++; }
+    }
+    if (count > 0) await persistData();
+    return count;
+  });
 }
 
 export async function bulkApplySplitRule(
@@ -279,50 +364,57 @@ export async function bulkApplySplitRule(
   amount: number | null,
   splits: SplitRuleItem[],
 ): Promise<number> {
-  const { transactions } = getData();
-  const norm = normalize(pattern);
-  let count = 0;
-  for (const txn of transactions) {
-    const txnNorm = normalize(txn.descriptor);
-    const descMatch = matchType === 'exact' ? txnNorm === norm : txnNorm.includes(norm);
-    const amountOk = amount == null || Math.abs(amount - txn.amount) < 0.01;
-    if (!descMatch || !amountOk) continue;
-    const resolved = resolveSplits(splits, txn.amount);
-    await setSplits(txn.id, resolved.map((s) => ({ categoryId: s.categoryId, amount: s.amount })));
-    count++;
-  }
-  return count;
+  return withUndo('Apply split rule', async () => {
+    const { transactions } = getData();
+    const norm = normalize(pattern);
+    const entries: { transactionId: number; splits: Array<{ categoryId: number; amount: number }> }[] = [];
+    for (const txn of transactions) {
+      const txnNorm = normalize(txn.descriptor);
+      const descMatch = matchType === 'exact' ? txnNorm === norm : txnNorm.includes(norm);
+      const amountOk = amount == null || Math.abs(amount - txn.amount) < 0.01;
+      if (!descMatch || !amountOk) continue;
+      entries.push({ transactionId: txn.id, splits: resolveSplits(splits, txn.amount) });
+    }
+    await setSplitsBulk(entries);
+    return entries.length;
+  });
 }
 
 export async function runRuleOnHistory(opts: RunRuleOptions): Promise<number> {
-  const { transactions, categoryRules } = getData();
-  const rule = categoryRules.find((r) => r.id === opts.ruleId);
-  if (!rule) return 0;
+  return withUndo('Run rule on history', async () => {
+    const { transactions, categoryRules } = getData();
+    const rule = categoryRules.find((r) => r.id === opts.ruleId);
+    if (!rule) return 0;
+    const hasSplits = splitTxnIds();
 
-  const norm = normalize(rule.pattern);
-  const amountMatch = (txn: Transaction) =>
-    rule.amountMatch == null || Math.abs((rule.amountMatch ?? 0) - txn.amount) < 0.01;
+    const norm = normalize(rule.pattern);
+    const amountMatch = (txn: Transaction) =>
+      rule.amountMatch == null || Math.abs((rule.amountMatch ?? 0) - txn.amount) < 0.01;
 
-  let count = 0;
-  for (const txn of transactions) {
-    if (!opts.includeAlreadyCategorized && txn.categoryId !== null) continue;
-    if (opts.startDate && txn.txnDate < opts.startDate) continue;
-    if (opts.endDate && txn.txnDate > opts.endDate) continue;
+    let count = 0;
+    const splitEntries: { transactionId: number; splits: Array<{ categoryId: number; amount: number }> }[] = [];
+    for (const txn of transactions) {
+      if (!opts.includeAlreadyCategorized && (txn.categoryId !== null || txn.isTransfer || hasSplits.has(txn.id))) continue;
+      if (opts.startDate && txn.txnDate < opts.startDate) continue;
+      if (opts.endDate && txn.txnDate > opts.endDate) continue;
 
-    const txnNorm = normalize(txn.descriptor);
-    const descMatch = rule.matchType === 'exact' ? txnNorm === norm : txnNorm.includes(norm);
-    if (!descMatch || !amountMatch(txn)) continue;
+      const txnNorm = normalize(txn.descriptor);
+      const descMatch = rule.matchType === 'exact' ? txnNorm === norm : txnNorm.includes(norm);
+      if (!descMatch || !amountMatch(txn)) continue;
 
-    if (rule.splits && rule.splits.length >= 2) {
-      const resolved = resolveSplits(rule.splits, txn.amount);
-      await setSplits(txn.id, resolved);
-    } else {
-      txn.categoryId = rule.categoryId;
+      if (rule.markTransfer) {
+        txn.isTransfer = true;
+      } else if (rule.splits && rule.splits.length >= 2) {
+        splitEntries.push({ transactionId: txn.id, splits: resolveSplits(rule.splits, txn.amount) });
+      } else {
+        txn.categoryId = rule.categoryId;
+      }
+      count++;
     }
-    count++;
-  }
-  if (count > 0) await persistData();
-  return count;
+    if (splitEntries.length > 0) await setSplitsBulk(splitEntries);
+    if (count > 0) await persistData();
+    return count;
+  });
 }
 
 export async function createRuleAndApply(
@@ -331,6 +423,8 @@ export async function createRuleAndApply(
   matchType: 'exact' | 'contains',
   amount?: number | null,
 ): Promise<number> {
-  await addCategoryRule({ matchType, pattern: pattern.toLowerCase(), categoryId, amountMatch: amount ?? null });
-  return bulkCategorizeByDescriptor(pattern, categoryId, matchType, amount);
+  return withUndo('Create rule', async () => {
+    await addCategoryRule({ matchType, pattern: pattern.toLowerCase(), categoryId, amountMatch: amount ?? null });
+    return bulkCategorizeByDescriptor(pattern, categoryId, matchType, amount);
+  });
 }

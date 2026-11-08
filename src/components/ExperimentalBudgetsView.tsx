@@ -162,7 +162,7 @@ export function ExperimentalBudgetsView() {
 
   // Categories not yet in selected budget (for add form)
   const usedCatIds = new Set(selectedBudget?.items.map((i) => i.categoryId) ?? []);
-  const availableCats = categories.filter((c) => !usedCatIds.has(c.id));
+  const availableCats = categories.filter((c) => !usedCatIds.has(c.id) && !c.archived);
 
   function startEdit(item: ExperimentalBudgetItem) {
     setEditItemCatId(item.categoryId);

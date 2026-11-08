@@ -9,6 +9,7 @@ import {
   type CustomParser,
   type AICategoryFeedback,
 } from '../db';
+import { isCredit } from './txnKind';
 
 export { type AISettings };
 
@@ -35,6 +36,20 @@ export const RECOMMENDED_MODELS = [
   { name: 'qwen2.5:14b', label: 'Qwen 2.5 14B — best quality (needs 12GB+ VRAM)' },
 ];
 
+const CHAT_TIMEOUT_MS = 180_000;
+
+/** fetch with a timeout; a timeout surfaces as "Ollama didn't respond in time". */
+export async function ollamaFetch(url: string, timeoutMs: number, init: RequestInit = {}): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (e) {
+    if (e instanceof DOMException && (e.name === 'TimeoutError' || e.name === 'AbortError')) {
+      throw new Error("Ollama didn't respond in time");
+    }
+    throw e;
+  }
+}
+
 export async function checkOllama(url: string): Promise<boolean> {
   try {
     const resp = await fetch(`${url}/api/version`, { signal: AbortSignal.timeout(3000) });
@@ -46,7 +61,7 @@ export async function checkOllama(url: string): Promise<boolean> {
 
 export async function listModels(url: string): Promise<string[]> {
   try {
-    const resp = await fetch(`${url}/api/tags`);
+    const resp = await ollamaFetch(`${url}/api/tags`, 5_000);
     const json = await resp.json();
     return (json.models ?? []).map((m: { name: string }) => m.name);
   } catch {
@@ -220,7 +235,7 @@ function buildSystemPrompt(appData: AppData): string {
     .slice(-300)
     .map((t) => {
       const cat = t.categoryId ? (catMap.get(t.categoryId) ?? '?') : 'uncategorized';
-      const sign = t.ignoreInBudget || t.amount < 0 ? '+' : '-';
+      const sign = isCredit(t) || t.amount < 0 ? '+' : '-';
       return `  [${t.id}] ${t.txnDate} ${sign}$${Math.abs(t.amount).toFixed(2)} "${t.descriptor}" cat:${cat} via:${t.instrument}${t.comment ? ` note:"${t.comment}"` : ''}`;
     })
     .join('\n');
@@ -310,7 +325,7 @@ async function executeTool(
           descriptor: t.descriptor,
           category: t.categoryId ? (catMap.get(t.categoryId) ?? null) : null,
           instrument: t.instrument,
-          ignoreInBudget: t.ignoreInBudget,
+          ignoreInBudget: isCredit(t),
           comment: t.comment,
         })),
       );
@@ -319,7 +334,7 @@ async function executeTool(
     case 'get_budget_summary': {
       const month = String(args.month || currentMonthStr());
       const txns = appData.transactions.filter(
-        (t) => t.txnDate.startsWith(month) && !t.ignoreInBudget && t.amount > 0,
+        (t) => t.txnDate.startsWith(month) && !isCredit(t) && t.amount > 0,
       );
       const spending = new Map<number, number>();
       for (const t of txns) {
@@ -427,7 +442,7 @@ export async function sendChat(
   const newHistory: LLMMessage[] = [...history, { role: 'user', content: userMessage }];
 
   for (let i = 0; i < 6; i++) {
-    const resp = await fetch(`${settings.ollamaUrl}/api/chat`, {
+    const resp = await ollamaFetch(`${settings.ollamaUrl}/api/chat`, CHAT_TIMEOUT_MS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -508,7 +523,7 @@ export async function lookupTransaction(
   const descFreq = new Map<string, Map<number, number>>();
   const wordFreq = new Map<string, Map<number, number>>();
   for (const t of data.transactions) {
-    if (t.categoryId == null || t.ignoreInBudget) continue;
+    if (t.categoryId == null || isCredit(t)) continue;
     const key = normDesc(t.descriptor);
     if (!key) continue;
     if (!descFreq.has(key)) descFreq.set(key, new Map());
@@ -598,7 +613,7 @@ Based on the history and web results above, respond with JSON only:
   onToolStatus('Analyzing…');
 
   for (let i = 0; i < 3; i++) {
-    const resp = await fetch(`${settings.ollamaUrl}/api/chat`, {
+    const resp = await ollamaFetch(`${settings.ollamaUrl}/api/chat`, CHAT_TIMEOUT_MS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -672,7 +687,7 @@ export async function suggestCategories(
   // Build historical examples from already-categorized transactions
   const catById = new Map(appData.categories.map((c) => [c.id, c.name]));
   const historicalExamples = appData.transactions
-    .filter((t) => t.categoryId != null && !t.ignoreInBudget)
+    .filter((t) => t.categoryId != null && !isCredit(t))
     .slice(-200)
     .map((t) => `"${t.descriptor}" → ${catById.get(t.categoryId!) ?? '?'}`)
     .join('\n');
@@ -688,7 +703,8 @@ export async function suggestCategories(
     })
     .join('\n');
 
-  const catList = categories.map((c) => `${c.id}: ${c.name}`).join('\n');
+  const archivedIds = new Set(appData.categories.filter((c) => c.archived).map((c) => c.id));
+  const catList = categories.filter((c) => !archivedIds.has(c.id)).map((c) => `${c.id}: ${c.name}`).join('\n');
   const txnList = transactions
     .map((t) => `${t.id}: "${t.descriptor}" $${t.amount.toFixed(2)}`)
     .join('\n');
@@ -709,7 +725,7 @@ Return ONLY a JSON array, nothing else: [{"id": <txnId>, "categoryId": <id>}, ..
 Only include transactions you are confident about. Skip uncertain ones.`;
 
   try {
-    const resp = await fetch(`${settings.ollamaUrl}/api/chat`, {
+    const resp = await ollamaFetch(`${settings.ollamaUrl}/api/chat`, CHAT_TIMEOUT_MS, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -718,7 +734,6 @@ Only include transactions you are confident about. Skip uncertain ones.`;
         stream: false,
         options: { temperature: 0.1 },
       }),
-      signal: AbortSignal.timeout(30000),
     });
 
     if (!resp.ok) return [];
@@ -757,7 +772,7 @@ function getSummary(month: string, appData: AppData) {
   const catMap = new Map(appData.categories.map((c) => [c.id, c.name]));
   const spending = new Map<number, number>();
   for (const t of appData.transactions) {
-    if (t.txnDate.startsWith(month) && !t.ignoreInBudget && t.amount > 0 && t.categoryId) {
+    if (t.txnDate.startsWith(month) && !isCredit(t) && t.amount > 0 && t.categoryId) {
       spending.set(t.categoryId, (spending.get(t.categoryId) ?? 0) + t.amount);
     }
   }
@@ -851,7 +866,7 @@ function buildStructuredAnswer(
     const budget = appData.budgets.find((b) => b.month === month && b.categoryId === categoryId);
     const target = budget?.targetAmount ?? 0;
     const txns = appData.transactions
-      .filter((t) => t.txnDate.startsWith(month) && t.categoryId === categoryId && !t.ignoreInBudget && t.amount > 0)
+      .filter((t) => t.txnDate.startsWith(month) && t.categoryId === categoryId && !isCredit(t) && t.amount > 0)
       .sort((a, b) => b.amount - a.amount);
     const totalSpent = txns.reduce((s, t) => s + t.amount, 0);
 
@@ -878,7 +893,7 @@ function buildStructuredAnswer(
     const budget = appData.budgets.find((b) => b.month === month && b.categoryId === categoryId);
     const target = budget?.targetAmount ?? 0;
     const txns = appData.transactions
-      .filter((t) => t.txnDate.startsWith(month) && t.categoryId === categoryId && !t.ignoreInBudget && t.amount > 0)
+      .filter((t) => t.txnDate.startsWith(month) && t.categoryId === categoryId && !isCredit(t) && t.amount > 0)
       .sort((a, b) => a.txnDate.localeCompare(b.txnDate));
     const totalSpent = txns.reduce((s, t) => s + t.amount, 0);
 
@@ -892,7 +907,7 @@ function buildStructuredAnswer(
 
     const prevData = prevMonths.map((pm) => {
       const pt = appData.transactions
-        .filter((t) => t.txnDate.startsWith(pm) && t.categoryId === categoryId && !t.ignoreInBudget && t.amount > 0)
+        .filter((t) => t.txnDate.startsWith(pm) && t.categoryId === categoryId && !isCredit(t) && t.amount > 0)
         .sort((a, b) => a.txnDate.localeCompare(b.txnDate));
       const ptotal = pt.reduce((s, t) => s + t.amount, 0);
       const lines = pt.length > 0
@@ -914,7 +929,7 @@ function buildStructuredAnswer(
     const missingDescriptors = new Set<string>();
     for (const pd of prevData) {
       const pt = appData.transactions.filter(
-        (t) => t.txnDate.startsWith(prevMonths[prevData.indexOf(pd)]) && t.categoryId === categoryId && !t.ignoreInBudget && t.amount > 0,
+        (t) => t.txnDate.startsWith(prevMonths[prevData.indexOf(pd)]) && t.categoryId === categoryId && !isCredit(t) && t.amount > 0,
       );
       for (const t of pt) {
         if (!thisDescriptors.has(t.descriptor.toLowerCase())) missingDescriptors.add(t.descriptor);
@@ -948,7 +963,7 @@ export async function answerStructuredQuestion(
 
   onStatus('Analyzing…');
 
-  const resp = await fetch(`${settings.ollamaUrl}/api/chat`, {
+  const resp = await ollamaFetch(`${settings.ollamaUrl}/api/chat`, CHAT_TIMEOUT_MS, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1067,7 +1082,7 @@ Write the parseTransactions(text, filename) function. Remember:
 - Convert dates to YYYY-MM-DD
 - instrument should be "${instrument}"`;
 
-  const resp = await fetch(`${settings.ollamaUrl}/api/chat`, {
+  const resp = await ollamaFetch(`${settings.ollamaUrl}/api/chat`, CHAT_TIMEOUT_MS, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({

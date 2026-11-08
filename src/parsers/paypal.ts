@@ -78,6 +78,8 @@ export function parsePaypalPaste(text: string): Omit<Transaction, 'id'>[] {
       ? Math.round(Math.abs(parsed.value) * EUR_TO_CAD * 100) / 100
       : Math.abs(parsed.value);
 
+    if (cadAmount === 0) continue; // zero-amount rows are noise
+
     const comment = parsed.currency === 'EUR'
       ? `Original: €${Math.abs(parsed.value).toFixed(2)} (converted at ~${EUR_TO_CAD} EUR/CAD)`
       : null;

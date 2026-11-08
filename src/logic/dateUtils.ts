@@ -30,3 +30,27 @@ export function monthRange(transactions: Transaction[]): string[] {
 
   return result;
 }
+
+export function currentMonthStr(): string {
+  return getCurrentMonth();
+}
+
+/** Inclusive list of YYYY-MM from `start` to `end`. Empty if start > end. */
+export function monthsBetween(start: string, end: string): string[] {
+  const result: string[] = [];
+  let [y, m] = start.split('-').map(Number);
+  const [endY, endM] = end.split('-').map(Number);
+  while (y < endY || (y === endY && m <= endM)) {
+    result.push(`${y}-${String(m).padStart(2, '0')}`);
+    m++;
+    if (m > 12) { m = 1; y++; }
+  }
+  return result;
+}
+
+/** Month immediately before `month` (YYYY-MM). */
+export function prevMonth(month: string): string {
+  const [y, m] = month.split('-').map(Number);
+  const d = new Date(y, m - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}

@@ -9,18 +9,15 @@ import { SettingsView } from './components/SettingsView';
 import { ExperimentalBudgetsView } from './components/ExperimentalBudgetsView';
 import { ToolsView } from './components/ToolsView';
 import { MortgageTool } from './components/MortgageTool';
-import { processRecurringTemplates } from './logic/recurring';
-import { processSchedules } from './logic/savings';
-import { startupCleanup, getAISettings, getData, undo, canUndo, subscribeUndo, type AppData } from './db';
+import { runStartupJobs } from './startup';
+import { getAISettings, getData, subscribe, undo, canUndo, getUndoLabel, subscribeUndo, getDisplaySettings, updateDisplaySettings, flushSave, retrySave, getSaveStatus, subscribeSaveStatus, resolveConflict } from './db';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { checkOllama } from './logic/llm';
 import { invoke } from '@tauri-apps/api/core';
 import './App.css';
 
 type Tab = 'budget' | 'transactions' | 'year' | 'savings' | 'import' | 'experimental' | 'settings' | 'tools' | 'mortgage';
 
-const MORTGAGE_TAB_KEY = 'budget-app-show-mortgage-tab';
-const EXPERIMENTAL_KEY = 'budget-app-experimental';
-const TXN_AI_LOOKUP_KEY = 'budget-app-txn-ai-lookup';
 
 export interface NavFilter {
   month?: string;
@@ -42,48 +39,6 @@ const BASE_TABS: { key: Tab; label: string }[] = [
 
 const ZOOM_KEY = 'budget-app-zoom';
 const DARK_KEY = 'budget-app-dark';
-const BACKUP_ENABLED_KEY = 'budget-app-backup-enabled';
-const BACKUP_COUNT_KEY = 'budget-app-backup-count';
-const BACKUP_DIR_KEY = 'budget-app-backup-dir';
-
-async function runStartupBackup(getDataFn: () => AppData) {
-  try {
-    const enabled = localStorage.getItem(BACKUP_ENABLED_KEY) === 'true';
-    if (!enabled) return;
-    const dir = localStorage.getItem(BACKUP_DIR_KEY);
-    if (!dir) return;
-    const maxCount = parseInt(localStorage.getItem(BACKUP_COUNT_KEY) ?? '3', 10);
-
-    // Get unencrypted JSON of current data
-    const data = getDataFn();
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-    const json = JSON.stringify({ ...data, _backupCreatedAt: new Date().toISOString() }, null, 2);
-
-    // List existing backup files
-    type FileInfo = { path: string; modified_secs: number };
-    const existing: FileInfo[] = await invoke('list_dir_files', { dir, ext: '.json' });
-    const backupFiles = existing
-      .filter((f) => {
-        const name = f.path.split('/').pop() ?? f.path.split('\\').pop() ?? '';
-        return name.startsWith('qbdgt-backup-') || name.startsWith('kestl-backup-');
-      })
-      .sort((a, b) => a.modified_secs - b.modified_secs);
-
-    let savePath: string;
-    const sep = dir.includes('\\') ? '\\' : '/';
-    if (backupFiles.length >= maxCount && backupFiles.length > 0) {
-      // Overwrite oldest
-      savePath = backupFiles[0].path;
-    } else {
-      savePath = `${dir}${sep}kestl-backup-${timestamp}.json`;
-    }
-
-    await invoke('save_data', { path: savePath, data: json });
-  } catch {
-    // Backup failure is non-fatal
-  }
-}
-
 function applyDarkMode(dark: boolean) {
   if (dark) {
     document.documentElement.classList.add('dark');
@@ -94,18 +49,30 @@ function applyDarkMode(dark: boolean) {
   }
 }
 
+function SaveIndicator({ info }: { info: { status: string; error?: string } }) {
+  if (info.status === 'error') {
+    return (
+      <button className="btn btn-ghost btn-sm" style={{ color: '#dc2626' }} title={info.error} onClick={() => { void retrySave().catch(() => {}); }}>
+        Save failed: Retry
+      </button>
+    );
+  }
+  const text = info.status === 'pending' || info.status === 'saving' ? 'Saving…' : info.status === 'conflict' ? 'Conflict' : 'Saved';
+  return <span style={{ fontSize: '0.75rem', opacity: 0.6, marginRight: '0.4rem' }}>{text}</span>;
+}
+
 function App() {
   const [ready, setReady] = useState(false);
   const [tab, setTab] = useState<Tab>('budget');
-  const [showMortgageTab, setShowMortgageTab] = useState(
-    () => localStorage.getItem(MORTGAGE_TAB_KEY) === 'true',
-  );
-  const [experimentalEnabled, setExperimentalEnabled] = useState(
-    () => localStorage.getItem(EXPERIMENTAL_KEY) === 'true',
-  );
-  const [txnAiLookupEnabled, setTxnAiLookupEnabled] = useState(
-    () => localStorage.getItem(TXN_AI_LOOKUP_KEY) === 'true',
-  );
+  useSyncExternalStore(subscribe, getData); // re-render when file-backed display settings change
+  const displaySettings = getDisplaySettings();
+  const showMortgageTab = displaySettings.showMortgageTab === true;
+  const experimentalEnabled = displaySettings.experimentalEnabled === true;
+  const txnAiLookupEnabled = displaySettings.txnAiLookupEnabled === true;
+  const saveInfo = useSyncExternalStore(subscribeSaveStatus, getSaveStatus);
+  const undoLabel = useSyncExternalStore(subscribeUndo, getUndoLabel, getUndoLabel);
+  const [startupError, setStartupError] = useState<string | null>(null);
+  const [closeError, setCloseError] = useState<string | null>(null);
   const [tabHistory, setTabHistory] = useState<Tab[]>([]);
   const [zoom, setZoom] = useState(() => {
     const stored = localStorage.getItem(ZOOM_KEY);
@@ -117,7 +84,7 @@ function App() {
   });
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [ollamaPrompt, setOllamaPrompt] = useState<{ model: string; binaryPath: string } | null>(null);
+  const [ollamaPrompt, setOllamaPrompt] = useState<{ model: string } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const undoAvailable = useSyncExternalStore(subscribeUndo, canUndo, canUndo);
 
@@ -142,12 +109,23 @@ function App() {
 
   useEffect(() => {
     if (ready) {
-      startupCleanup();
-      processRecurringTemplates();
-      processSchedules();
-      runStartupBackup(getData);
+      runStartupJobs().catch((e) => setStartupError(e instanceof Error ? e.message : String(e)));
     }
   }, [ready]);
+
+  // Flush pending saves before the window closes.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    getCurrentWindow().onCloseRequested(async (event) => {
+      try {
+        await flushSave();
+      } catch (e) {
+        event.preventDefault();
+        setCloseError(e instanceof Error ? e.message : String(e));
+      }
+    }).then((fn) => { unlisten = fn; }).catch(() => { /* not running inside Tauri */ });
+    return () => { unlisten?.(); };
+  }, []);
 
   // Called by features that require Ollama (parser generator, transaction AI lookup).
   // Shows "Start Ollama" prompt if binary is found, otherwise navigates to Settings.
@@ -161,7 +139,7 @@ function App() {
     if (!running) {
       const binaryPath = await invoke<string | null>('find_ollama');
       if (binaryPath) {
-        setOllamaPrompt({ model: ai.model, binaryPath });
+        setOllamaPrompt({ model: ai.model });
       } else {
         changeTab('settings');
       }
@@ -258,7 +236,7 @@ function App() {
               <button
                 className="btn btn-primary"
                 onClick={() => {
-                  invoke('start_ollama', { binaryPath: ollamaPrompt.binaryPath });
+                  invoke('start_ollama');
                   setOllamaPrompt(null);
                 }}
               >
@@ -269,6 +247,45 @@ function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {saveInfo.status === 'conflict' && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: 460 }}>
+            <h3 style={{ marginTop: 0 }}>File changed outside kestl</h3>
+            <p>This file was changed outside kestl (another device, a sync app, or another window).</p>
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => { void resolveConflict('reload').catch((e) => setStartupError(String(e))); }}>
+                Reload from disk (my unsaved changes here are lost)
+              </button>
+              <button className="btn btn-primary" onClick={() => { void resolveConflict('overwrite').catch((e) => setStartupError(String(e))); }}>
+                Overwrite with my version
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {closeError && (
+        <div className="modal-overlay">
+          <div className="modal" style={{ maxWidth: 420 }}>
+            <h3 style={{ marginTop: 0 }}>Unsaved changes</h3>
+            <p>Your latest changes could not be saved: {closeError}</p>
+            <div className="modal-actions">
+              <button className="btn btn-primary" onClick={() => { setCloseError(null); void retrySave().then(() => getCurrentWindow().close()).catch((e) => setCloseError(e instanceof Error ? e.message : String(e))); }}>
+                Retry
+              </button>
+              <button className="btn btn-ghost" onClick={() => { setCloseError(null); void getCurrentWindow().destroy(); }}>
+                Quit anyway
+              </button>
+              <button className="btn btn-ghost" onClick={() => setCloseError(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {startupError && (
+        <div style={{ background: '#fee2e2', color: '#991b1b', padding: '0.4rem 0.8rem', fontSize: '0.85rem', display: 'flex', justifyContent: 'space-between' }}>
+          <span>Startup tasks failed: {startupError}</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => setStartupError(null)}>&times;</button>
         </div>
       )}
       <nav className="tab-bar">
@@ -304,11 +321,12 @@ function App() {
             className="ai-toggle-btn"
             onClick={() => undo()}
             disabled={!undoAvailable}
-            title="Undo last action (Ctrl+Z)"
+            title={undoLabel ? `Undo: ${undoLabel} (Ctrl+Z)` : 'Nothing to undo'}
             style={{ opacity: undoAvailable ? 1 : 0.35 }}
           >
             ↩ Undo
           </button>
+          <SaveIndicator info={saveInfo} />
           <button
             className={`ai-toggle-btn ${tab === 'settings' ? 'active' : ''}`}
             onClick={() => changeTab(tab === 'settings' ? 'budget' : 'settings')}
@@ -387,7 +405,6 @@ function App() {
         {tab === 'mortgage' && (
           <div style={{ maxWidth: 1400, margin: '0 auto' }}>
             <MortgageTool onShowMortgageTabChange={(show) => {
-              setShowMortgageTab(show);
               if (!show && tab === 'mortgage') changeTab('tools');
             }} />
           </div>
@@ -401,20 +418,11 @@ function App() {
               darkMode={darkMode}
               onDarkModeChange={setDarkMode}
               experimentalEnabled={experimentalEnabled}
-              onExperimentalChange={(v) => {
-                setExperimentalEnabled(v);
-                localStorage.setItem(EXPERIMENTAL_KEY, String(v));
-              }}
+              onExperimentalChange={(v) => { void updateDisplaySettings({ experimentalEnabled: v }); }}
               showMortgageTab={showMortgageTab}
-              onShowMortgageTabChange={(show) => {
-                setShowMortgageTab(show);
-                localStorage.setItem(MORTGAGE_TAB_KEY, String(show));
-              }}
+              onShowMortgageTabChange={(show) => { void updateDisplaySettings({ showMortgageTab: show }); }}
               txnAiLookupEnabled={txnAiLookupEnabled}
-              onTxnAiLookupChange={(v) => {
-                setTxnAiLookupEnabled(v);
-                localStorage.setItem(TXN_AI_LOOKUP_KEY, String(v));
-              }}
+              onTxnAiLookupChange={(v) => { void updateDisplaySettings({ txnAiLookupEnabled: v }); }}
               onNeedOllama={checkAndPromptOllama}
               onRegisterBack={(handler) => setCustomBackHandler(handler ? () => handler : null)}
               parserToOpen={settingsParserToOpen}

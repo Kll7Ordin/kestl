@@ -138,7 +138,7 @@ export function parseBankCsv(
     if (/^pending\b|^pre-?auth\b/.test(descLower)) continue;
 
     const rawAmount = parseFloat(amountRaw.replace(/[,$]/g, ''));
-    if (isNaN(rawAmount)) continue;
+    if (isNaN(rawAmount) || rawAmount === 0) continue; // zero-amount rows are noise
 
     const descriptor = [desc, subDesc].filter(Boolean).join(' ').trim();
 

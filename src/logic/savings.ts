@@ -1,5 +1,7 @@
-import { getData, addSavingsEntry } from '../db';
+import { getData, bulkAddSavingsEntries, type SavingsEntry } from '../db';
 import { monthRange } from './dateUtils';
+import { getSplitsIndex } from './spend';
+import { isCredit } from './txnKind';
 
 /**
  * Generate savings auto-contributions from each schedule's startMonth
@@ -9,41 +11,38 @@ import { monthRange } from './dateUtils';
 export async function processSchedules(): Promise<number> {
   const { savingsSchedules, savingsEntries, transactions, categories } = getData();
   const months = monthRange(transactions);
-  let created = 0;
 
   // Buckets that have linked categories are fed by real transactions — skip scheduler for those
   const txnFedBucketIds = new Set(
     categories.filter((c) => c.savingsBucketId != null).map((c) => c.savingsBucketId!)
   );
 
+  const existing = new Set<string>();
+  for (const e of savingsEntries) {
+    if (e.scheduleId != null) existing.add(`${e.scheduleId}|${e.entryDate.slice(0, 7)}`);
+  }
+
+  const toAdd: Omit<SavingsEntry, 'id'>[] = [];
   for (const month of months) {
     for (const sched of savingsSchedules) {
       if (!sched.active) continue;
       if (sched.startMonth > month) continue;
-      // Skip buckets that are fed by real transactions to avoid double-counting
       if (txnFedBucketIds.has(sched.bucketId)) continue;
-
-      const alreadyExists = savingsEntries.some(
-        (e) => e.scheduleId === sched.id && e.entryDate.startsWith(month),
-      );
-      if (alreadyExists) continue;
+      if (existing.has(`${sched.id}|${month}`)) continue;
 
       const day = Math.min(sched.dayOfMonth, 28);
-      const entryDate = `${month}-${String(day).padStart(2, '0')}`;
-
-      await addSavingsEntry({
-        entryDate,
+      toAdd.push({
+        entryDate: `${month}-${String(day).padStart(2, '0')}`,
         bucketId: sched.bucketId,
         amount: sched.amount,
         notes: 'Auto-contribution (schedule)',
         source: 'auto_schedule',
         scheduleId: sched.id,
       });
-      created++;
     }
   }
-
-  return created;
+  await bulkAddSavingsEntries(toAdd);
+  return toAdd.length;
 }
 
 export function getBucketBalance(bucketId: number): number {
@@ -67,16 +66,11 @@ export function getBucketBalance(bucketId: number): number {
     ? bucketEntries.reduce((min, e) => e.entryDate < min ? e.entryDate : min, bucketEntries[0].entryDate)
     : null;
 
-  const splitsByTxn = new Map<number, typeof transactionSplits>();
-  for (const s of transactionSplits) {
-    const arr = splitsByTxn.get(s.transactionId) ?? [];
-    arr.push(s);
-    splitsByTxn.set(s.transactionId, arr);
-  }
+  const splitsByTxn = getSplitsIndex({ transactionSplits });
 
   let txnBalance = 0;
   for (const t of transactions) {
-    if (t.ignoreInBudget) continue;
+    if (isCredit(t) || t.isTransfer) continue;
     if (openDate && t.txnDate < openDate) continue;
     const splits = splitsByTxn.get(t.id);
     if (splits && splits.length > 0) {

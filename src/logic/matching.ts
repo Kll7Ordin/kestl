@@ -1,4 +1,5 @@
-import { getData, persistData, type Transaction } from '../db';
+import { getData, persistData, pushUndoSnapshot, withUndo, type Transaction } from '../db';
+import { isCredit, isPaypalLinked } from './txnKind';
 
 function tokenize(s: string): Set<string> {
   return new Set(
@@ -31,7 +32,7 @@ export interface PaypalMatchCandidate {
  */
 function isBankPaypalCandidate(t: Transaction, allTxns: Transaction[]): boolean {
   if (t.instrument === 'PayPal') return false;
-  if (t.linkedTransactionId === -1) return false; // already PayPal-linked via new system
+  if (isPaypalLinked(t)) return false; // already PayPal-linked via new system
 
   const hasPaypalInDesc = /paypal/i.test(t.descriptor);
 
@@ -63,7 +64,7 @@ export async function matchPaypalTransactions(paypalIds: number[]): Promise<Payp
   const bankPaypalDebits = data.transactions.filter((t) => isBankPaypalCandidate(t, data.transactions));
   // All unlinked non-PayPal bank debits for the second pass (token-based matching)
   const allBankDebits = data.transactions.filter(
-    (t) => t.instrument !== 'PayPal' && t.linkedTransactionId === null && !t.ignoreInBudget,
+    (t) => t.instrument !== 'PayPal' && t.linkedTransactionId === null && !isCredit(t),
   );
 
   let autoMatched = 0;
@@ -81,7 +82,7 @@ export async function matchPaypalTransactions(paypalIds: number[]): Promise<Payp
     for (const bank of candidates) {
       if (usedIds.has(bank.id)) continue;
       // Credits (refunds) must match credits; debits must match debits
-      if (pp.ignoreInBudget !== bank.ignoreInBudget) continue;
+      if (isCredit(pp) !== isCredit(bank)) continue;
       const days = dateDiffDays(pp.txnDate, bank.txnDate);
       if (days > 5) continue;
 
@@ -116,7 +117,7 @@ export async function matchPaypalTransactions(paypalIds: number[]): Promise<Payp
     if (bestMatch) {
       if (isExact) {
         applyPaypalToBank(bestMatch, pp);
-        if (pp.ignoreInBudget) linkRefundToOriginal(bestMatch, data.transactions);
+        if (isCredit(pp)) linkRefundToOriginal(bestMatch, data.transactions);
         ppToRemove.add(pp.id);
         usedIds.add(bestMatch.id);
         autoMatched++;
@@ -135,7 +136,7 @@ export async function matchPaypalTransactions(paypalIds: number[]): Promise<Payp
     if (bestMatch) {
       if (isExact) {
         applyPaypalToBank(bestMatch, pp);
-        if (pp.ignoreInBudget) linkRefundToOriginal(bestMatch, data.transactions);
+        if (isCredit(pp)) linkRefundToOriginal(bestMatch, data.transactions);
         ppToRemove.add(pp.id);
         usedIds.add(bestMatch.id);
         autoMatched++;
@@ -180,7 +181,7 @@ function linkRefundToOriginal(refundCredit: Transaction, allTxns: Transaction[])
   let bestDate = '';
 
   for (const t of allTxns) {
-    if (t.ignoreInBudget) continue;
+    if (isCredit(t)) continue;
     if (t.id === refundCredit.id) continue;
     if (Math.abs(t.amount - refundAmt) > 0.02) continue;
     if (t.txnDate >= refundCredit.txnDate) continue;
@@ -207,7 +208,7 @@ function linkRefundToOriginal(refundCredit: Transaction, allTxns: Transaction[])
   // Overwrite -1 sentinel with the actual original's ID
   refundCredit.linkedTransactionId = bestMatch.id;
   // Link original back (only if not already pointing to a specific refund)
-  if (!bestMatch.linkedTransactionId || bestMatch.linkedTransactionId === -1) {
+  if (!bestMatch.linkedTransactionId || isPaypalLinked(bestMatch)) {
     bestMatch.linkedTransactionId = refundCredit.id;
   }
 }
@@ -219,11 +220,12 @@ export async function rematchAllPaypal(): Promise<PaypalMatchResult> {
     (t) => t.instrument === 'PayPal' && t.linkedTransactionId === null,
   );
   if (unlinkedPP.length === 0) return { autoMatched: 0, fuzzy: [], unmatched: [] };
-  return matchPaypalTransactions(unlinkedPP.map((t) => t.id));
+  return withUndo('Re-match PayPal', () => matchPaypalTransactions(unlinkedPP.map((t) => t.id)));
 }
 
 /** Delete unmatched PayPal transactions that the user chose to discard. */
 export async function discardPaypalTransactions(ids: number[]): Promise<void> {
+  pushUndoSnapshot('Discard PayPal transactions');
   const data = getData();
   const idSet = new Set(ids);
   data.transactions = data.transactions.filter((t) => !idSet.has(t.id));
@@ -232,6 +234,7 @@ export async function discardPaypalTransactions(ids: number[]): Promise<void> {
 }
 
 export async function confirmPaypalMatch(paypalId: number, cardId: number): Promise<void> {
+  pushUndoSnapshot('Confirm PayPal match');
   const data = getData();
   const pp = data.transactions.find((t) => t.id === paypalId);
   const card = data.transactions.find((t) => t.id === cardId);

@@ -18,36 +18,11 @@ import {
 } from 'chart.js';
 import { Line, Doughnut, Bar } from 'react-chartjs-2';
 import { formatAmount } from '../utils/format';
+import { forecastMonths } from '../logic/forecast';
+import { computeYearData, monthsOfYear, rollingTwelveMonths, mostRecentCompletedMonth, type MonthData } from '../logic/yearData';
+import { isCredit } from '../logic/txnKind';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, ArcElement, BarElement, DoughnutController, BarController, Filler, Title, Tooltip, Legend);
-
-function mostRecentCompletedMonth(): string {
-  const d = new Date();
-  d.setMonth(d.getMonth() - 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
-function monthsOfYear(year: number): string[] {
-  return Array.from({ length: 12 }, (_, i) =>
-    `${year}-${String(i + 1).padStart(2, '0')}`
-  );
-}
-
-function rollingTwelveMonths(): string[] {
-  const now = new Date();
-  return Array.from({ length: 12 }, (_, i) => {
-    const d = new Date(now.getFullYear(), now.getMonth() - 12 + i, 1);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
-}
-
-interface MonthData {
-  month: string;
-  planned: number;
-  actual: number;
-  income: number;
-  savings: number; // Occasional group spending
-}
 
 interface YearNavFilter {
   categoryId?: number;
@@ -99,87 +74,10 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
     if (!navFilter) navFilterApplied.current = false;
   }, [navFilter, onNavConsumed]);
 
-  const data: MonthData[] = useMemo(() => {
-    const { budgets: allBudgets, transactions: allTxns, transactionSplits: allSplits } = appData;
-    const months = ytdMode === 'rolling12' ? rollingTwelveMonths() : monthsOfYear(year);
-
-    const splitsByTxn = new Map<number, typeof allSplits>();
-    for (const s of allSplits) {
-      const arr = splitsByTxn.get(s.transactionId) ?? [];
-      arr.push(s);
-      splitsByTxn.set(s.transactionId, arr);
-    }
-
-    const filterCats =
-      scope === 'categories' && selectedCats.length > 0 ? new Set(selectedCats) :
-      scope === 'groups' && selectedGroups.length > 0 ? new Set(allBudgets.filter((b) => selectedGroups.includes(b.groupId ?? -1)).map((b) => b.categoryId)) :
-      null;
-
-    // Income categories
-    const incomeCatIds = new Set(
-      categories
-        .filter((c) => c.isIncome || INCOME_CATEGORY_NAMES.has(c.name))
-        .map((c) => c.id),
-    );
-
-    // Occasional group categories (Savings spending — excluded from regular Actual)
-    const spendFromSavingsGroupIds = new Set(
-      (appData.budgetGroups ?? [])
-        .filter((g) => g.spendFromSavings || g.name === 'Occasional')
-        .map((g) => g.id)
-    );
-    const occasionalCatIds = new Set(
-      allBudgets.filter((b) => b.groupId != null && spendFromSavingsGroupIds.has(b.groupId)).map((b) => b.categoryId)
-    );
-
-    return months.map((m) => {
-      const mBudgets = allBudgets.filter((b) =>
-        b.month === m && (!filterCats || filterCats.has(b.categoryId))
-      );
-      const budgetedExpenseCatIds = new Set(
-        mBudgets.filter((b) => !incomeCatIds.has(b.categoryId)).map((b) => b.categoryId)
-      );
-      // Planned excludes Occasional (savings spending) so variance reflects regular budget
-      const planned = mBudgets
-        .filter((b) => !incomeCatIds.has(b.categoryId) && !occasionalCatIds.has(b.categoryId))
-        .reduce((s, b) => s + b.targetAmount, 0);
-
-      let actual = 0;
-      let income = 0;
-      let savings = 0;
-      for (const t of allTxns) {
-        const splits = splitsByTxn.get(t.id);
-        if (splits && splits.length > 0) {
-          for (const s of splits) {
-            const effectiveDate = s.txnDate ?? t.txnDate;
-            if (!effectiveDate.startsWith(m)) continue;
-            if (incomeCatIds.has(s.categoryId)) {
-              if (t.ignoreInBudget) income += Math.abs(s.amount);
-            } else if (budgetedExpenseCatIds.has(s.categoryId)) {
-              if (occasionalCatIds.has(s.categoryId)) {
-                if (!t.ignoreInBudget) savings += s.amount;
-              } else if (!t.ignoreInBudget) {
-                actual += s.amount;
-              }
-            }
-          }
-        } else if (t.categoryId) {
-          if (!t.txnDate.startsWith(m)) continue;
-          if (incomeCatIds.has(t.categoryId)) {
-            if (t.ignoreInBudget) income += Math.abs(t.amount);
-          } else if (budgetedExpenseCatIds.has(t.categoryId)) {
-            if (occasionalCatIds.has(t.categoryId)) {
-              if (!t.ignoreInBudget) savings += t.amount;
-            } else if (!t.ignoreInBudget) {
-              actual += t.amount;
-            }
-          }
-        }
-      }
-
-      return { month: m, planned, actual, income, savings };
-    });
-  }, [appData, year, scope, selectedCats, selectedGroups, ytdMode]);
+  const data: MonthData[] = useMemo(
+    () => computeYearData(appData, { year, scope, selectedCats, selectedGroups, ytdMode }),
+    [appData, year, scope, selectedCats, selectedGroups, ytdMode],
+  );
 
   const monthLabels = data.map((d) => {
     const [yr, mo] = d.month.split('-').map(Number);
@@ -238,7 +136,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
 
     const spendByCat = new Map<number, number>();
     for (const t of allTxns) {
-      if (t.ignoreInBudget) continue;
+      if (isCredit(t)) continue;
       const splits = splitsByTxn.get(t.id);
       if (splits && splits.length > 0) {
         for (const s of splits) {
@@ -462,6 +360,8 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
     );
   }
 
+  const forecast = useMemo(() => forecastMonths(appData, 3), [appData]);
+
   return (
     <div>
       <h1 className="view-title">Year View</h1>
@@ -562,6 +462,31 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
           />
         </div>
       </div>
+
+      {/* ── Next 3 months forecast ── */}
+      {forecast.some((f) => f.income > 0 || f.expense > 0) && (
+        <div className="card" style={{ marginTop: '1.5rem', overflowX: 'auto' }}>
+          <div className="section-title" style={{ marginTop: 0 }}>Next 3 months (planned)</div>
+          <table className="data-table">
+            <thead>
+              <tr><th>Month</th><th className="num">Income</th><th className="num">Expenses</th><th className="num">Net</th></tr>
+            </thead>
+            <tbody>
+              {forecast.map((f) => {
+                const [yr, mo] = f.month.split('-').map(Number);
+                return (
+                  <tr key={f.month}>
+                    <td>{new Date(yr, mo - 1, 1).toLocaleString('en-CA', { month: 'short' })} {yr}</td>
+                    <td className="num positive" style={{ fontWeight: 'normal' }}>${formatAmount(f.income, 0)}</td>
+                    <td className="num" style={{ fontWeight: 'normal' }}>${formatAmount(f.expense, 0)}</td>
+                    <td className={`num ${f.net >= 0 ? 'positive' : 'negative'}`} style={{ fontWeight: 'normal' }}>${formatAmount(f.net, 0)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* ── Monthly table — hidden by default, togglable ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '1.5rem', marginBottom: '0.5rem' }}>

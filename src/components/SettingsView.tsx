@@ -1,4 +1,4 @@
-import { useState, useEffect, useSyncExternalStore, useRef, useMemo } from 'react';
+import { useState, useEffect, useSyncExternalStore, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { PasswordPrompt } from './PasswordPrompt';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -9,6 +9,10 @@ import {
   loadFromFile,
   addCategory,
   deleteCategory,
+  getCategoryUsage,
+  setCategoryArchived,
+  setCategoryRollover,
+  type Category,
   addCategoryRule,
   updateCategoryRule,
   deleteCategoryRule,
@@ -42,7 +46,12 @@ import {
   getMortgageConfig,
   deleteMortgage,
   reorderCategoryRules,
+  getBackupSettings,
+  updateBackupSettings,
 } from '../db';
+import { runBackup, getBackupDir, setBackupDir as persistBackupDir, getBackupState, subscribeBackup } from '../backup';
+import { runStartupJobs } from '../startup';
+import { isEncryptedFile } from '../utils/crypto';
 import { recategorizeAll, bulkApplySplitRule, bulkCategorizeByDescriptor, runRuleOnHistory } from '../logic/categorize';
 import { createReadableArchive } from '../utils/export';
 import { encryptData } from '../utils/crypto';
@@ -55,6 +64,7 @@ import { ImportBudgetCard } from './ImportBudgetCard';
 import { SearchableSelect } from './SearchableSelect';
 import { DateInput } from './DateInput';
 import { formatAmount } from '../utils/format';
+import { isPaypalLinked } from '../logic/txnKind';
 
 function CategoriesScreen({ onClose }: { onClose: () => void }) {
   const data = useSyncExternalStore(subscribe, getData);
@@ -68,6 +78,16 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
   const [mergeSourceIds, setMergeSourceIds] = useState<Set<number>>(new Set());
   const [mergeConfirm, setMergeConfirm] = useState(false);
   const [renamingCatId, setRenamingCatId] = useState<number | null>(null);
+  const [usageModalId, setUsageModalId] = useState<number | null>(null);
+  const [usageMergeTarget, setUsageMergeTarget] = useState<number | ''>('');
+  const [showArchived, setShowArchived] = useState(false);
+  const activeCategories = categories.filter((c) => !c.archived);
+  const archivedCategories = categories.filter((c) => c.archived);
+
+  async function handleDeleteClick(c: Category) {
+    if (getCategoryUsage(c.id).total === 0) await deleteCategory(c.id);
+    else { setUsageModalId(c.id); setUsageMergeTarget(''); }
+  }
 
   async function handleAddCategory() {
     if (!newCat.trim()) return;
@@ -79,6 +99,7 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
     if (!mergeTargetId || mergeSourceIds.size === 0) return;
     const sources = [...mergeSourceIds].filter((id) => id !== mergeTargetId);
     if (sources.length === 0) return;
+    await runBackup('pre-merge');
     await mergeCategories(sources, mergeTargetId as number);
     setMergeSourceIds(new Set());
     setMergeTargetId('');
@@ -92,7 +113,7 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
         <h1 style={{ margin: 0, fontSize: '1.45rem', fontWeight: 700 }}>Categories</h1>
       </div>
       <div className="card">
-        {categories.map((c) => (
+        {activeCategories.map((c) => (
           <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.3rem 0', borderBottom: '1px solid var(--border)', gap: '0.5rem', flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 120 }}>
               <input
@@ -148,13 +169,21 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
               >
                 Income
               </button>
-              <button className="btn btn-danger btn-sm" onClick={() => deleteCategory(c.id)}>
+              <button
+                className={`btn btn-sm ${c.rollover ? 'btn-primary' : 'btn-ghost'}`}
+                title={c.rollover ? `Rollover on since ${c.rolloverStartMonth} — unspent or overspent budget carries into the next month. Click to turn off.` : 'Carry unspent/overspent budget into the next month'}
+                onClick={() => setCategoryRollover(c.id, !c.rollover)}
+                style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem' }}
+              >
+                Rollover
+              </button>
+              <button className="btn btn-danger btn-sm" onClick={() => handleDeleteClick(c)}>
                 &times;
               </button>
             </div>
           </div>
         ))}
-        {categories.length === 0 && <p className="empty">No categories</p>}
+        {activeCategories.length === 0 && <p className="empty">No categories</p>}
         <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', alignItems: 'center' }}>
           <input
             style={{ flex: 1 }}
@@ -166,6 +195,61 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
           <button className="btn btn-primary" style={{ flexShrink: 0 }} onClick={handleAddCategory}>Add</button>
         </div>
       </div>
+
+      {archivedCategories.length > 0 && (
+        <div className="card" style={{ marginTop: '1rem' }}>
+          <button className="btn btn-ghost btn-sm" onClick={() => setShowArchived((v) => !v)}>
+            {showArchived ? '▾' : '▸'} Archived ({archivedCategories.length})
+          </button>
+          {showArchived && archivedCategories.map((c) => (
+            <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.3rem 0', borderBottom: '1px solid var(--border)' }}>
+              <span style={{ color: 'var(--text-3)' }}>{c.name}</span>
+              <button className="btn btn-ghost btn-sm" onClick={() => setCategoryArchived(c.id, false)}>Unarchive</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {usageModalId !== null && (() => {
+        const cat = categories.find((c) => c.id === usageModalId);
+        if (!cat) return null;
+        const u = getCategoryUsage(cat.id);
+        const parts = [
+          u.transactions && `${u.transactions} transaction${u.transactions === 1 ? '' : 's'}`,
+          u.splits && `${u.splits} split${u.splits === 1 ? '' : 's'}`,
+          u.budgets && `${u.budgets} budget${u.budgets === 1 ? '' : 's'}`,
+          u.rules && `${u.rules} rule${u.rules === 1 ? '' : 's'}`,
+          u.recurring && `${u.recurring} recurring template${u.recurring === 1 ? '' : 's'}`,
+          u.experimental && `${u.experimental} sandbox budget item${u.experimental === 1 ? '' : 's'}`,
+          u.mortgage && 'the mortgage settings',
+        ].filter(Boolean).join(', ');
+        return (
+          <div className="modal-overlay">
+            <div className="modal" style={{ maxWidth: 460 }}>
+              <h3 style={{ marginTop: 0 }}>“{cat.name}” is in use</h3>
+              <p>Used by {parts}. Archive keeps history and hides it from pickers, or merge it into another category.</p>
+              <div className="field" style={{ marginBottom: '0.75rem' }}>
+                <label style={{ fontSize: '0.8rem' }}>Merge into…</label>
+                <SearchableSelect
+                  options={activeCategories.filter((c) => c.id !== cat.id).map((c) => ({ value: c.id, label: c.name }))}
+                  value={usageMergeTarget}
+                  onChange={(v) => setUsageMergeTarget(v as number | '')}
+                  placeholder="Select target category…"
+                />
+              </div>
+              <div className="modal-actions">
+                <button className="btn btn-primary" onClick={async () => { await setCategoryArchived(cat.id, true); setUsageModalId(null); }}>Archive</button>
+                <button className="btn btn-ghost" disabled={usageMergeTarget === ''} onClick={async () => {
+                  await runBackup('pre-merge');
+                  await mergeCategories([cat.id], usageMergeTarget as number);
+                  setUsageModalId(null);
+                }}>Merge</button>
+                <button className="btn btn-ghost" onClick={() => setUsageModalId(null)}>Cancel</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Merge Categories */}
       <div className="card" style={{ marginTop: '1rem' }}>
@@ -261,7 +345,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
   const categories = data.categories;
   const sq = search.trim().toLowerCase();
   const catMap = useMemo(() => new Map(categories.map((c) => [c.id, c.name])), [categories]);
-  const categoryOptions = useMemo(() => categories.map((c) => ({ value: c.id, label: c.name })), [categories]);
+  const categoryOptions = useMemo(() => categories.filter((c) => !c.archived).map((c) => ({ value: c.id, label: c.name })), [categories]);
   const rules = useMemo(() => {
     const orderMap = new Map(data.categoryRules.map((r, i) => [r.id, i + 1]));
     return data.categoryRules
@@ -348,6 +432,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
   const [tmplAmount, setTmplAmount] = useState('');
   const [tmplCategory, setTmplCategory] = useState<number | ''>('');
   const [tmplDay, setTmplDay] = useState('1');
+  const [tmplStartMonth, setTmplStartMonth] = useState(() => new Date().toISOString().slice(0, 7));
 
   const [editTmplId, setEditTmplId] = useState<number | null>(null);
   const [editTmplDescriptor, setEditTmplDescriptor] = useState('');
@@ -422,7 +507,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
     try {
       const binaryPath = await invoke<string | null>('find_ollama');
       if (!binaryPath) { setInstallStatus('Ollama binary not found. Try downloading first.'); return; }
-      await invoke('start_ollama', { binaryPath });
+      await invoke('start_ollama');
       setInstallStatus('Ollama started. Checking connection…');
       await new Promise((r) => setTimeout(r, 2000));
       await checkAiConnection(aiUrl, false);
@@ -632,6 +717,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
       categoryId: tmplCategory ? (tmplCategory as number) : null,
       dayOfMonth: parseInt(tmplDay),
       active: true,
+      startMonth: /^\d{4}-\d{2}$/.test(tmplStartMonth) ? tmplStartMonth : undefined,
     });
     setTmplDescriptor('');
     setTmplAmount('');
@@ -667,22 +753,36 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
     setEditTmplId(null);
   }
 
-  // Backup settings (stored in localStorage; defaults: on, 2 backups, same dir as data file)
+  // Backup settings: enabled/count live in the data file; the folder is per machine and per data file.
   const filePath = getFilePath();
-  const defaultBackupDir = filePath ? filePath.replace(/[\\/][^\\/]+$/, '') : '';
-  const [backupEnabled, setBackupEnabled] = useState(() => {
-    const stored = localStorage.getItem('budget-app-backup-enabled');
-    return stored === null ? true : stored === 'true'; // default ON
-  });
-  const [backupCount, setBackupCount] = useState(() => parseInt(localStorage.getItem('budget-app-backup-count') ?? '2', 10));
-  const [backupDir, setBackupDir] = useState(() => localStorage.getItem('budget-app-backup-dir') || defaultBackupDir);
-  const backupSaveRef = useRef(false);
+  const backupSettings = getBackupSettings();
+  const [backupDir, setBackupDir] = useState(() => (filePath ? getBackupDir(filePath) : ''));
+  const backupState = useSyncExternalStore(subscribeBackup, () => JSON.stringify(getBackupState()));
+  const { lastBackupAt, lastBackupError } = JSON.parse(backupState) as ReturnType<typeof getBackupState>;
+  const [plainBackups, setPlainBackups] = useState<string[]>([]);
+  const [confirmDeletePlain, setConfirmDeletePlain] = useState(false);
+  const fileEncrypted = isCurrentFileEncrypted();
 
-  function saveBackupSettings(enabled: boolean, count: number, dir: string) {
-    localStorage.setItem('budget-app-backup-enabled', String(enabled));
-    localStorage.setItem('budget-app-backup-count', String(count));
-    localStorage.setItem('budget-app-backup-dir', dir);
-  }
+  useEffect(() => {
+    if (!fileEncrypted || !backupDir) { setPlainBackups([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const files = await invoke<{ path: string }[]>('list_dir_files', { dir: backupDir, ext: '' });
+        const plain: string[] = [];
+        for (const f of files) {
+          const name = f.path.split(/[\\/]/).pop() ?? '';
+          if (!name.startsWith('kestl-backup-') && !name.startsWith('qbdgt-backup-')) continue;
+          try {
+            const raw = await invoke<string>('load_data', { path: f.path });
+            if (!isEncryptedFile(raw)) plain.push(f.path);
+          } catch { /* unreadable: ignore */ }
+        }
+        if (!cancelled) setPlainBackups(plain);
+      } catch { if (!cancelled) setPlainBackups([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [fileEncrypted, backupDir, lastBackupAt]);
 
   const [exportStatus, setExportStatus] = useState<string | null>(null);
   const [jsonExportStatus, setJsonExportStatus] = useState<string | null>(null);
@@ -780,6 +880,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
           onSubmit={async (password) => {
             await loadFromFile(pendingEncryptedPath, password);
             setPendingEncryptedPath(null);
+            void runStartupJobs().catch((e) => alert(`Startup tasks failed: ${String(e)}`));
           }}
           onCancel={() => setPendingEncryptedPath(null)}
         />
@@ -1210,47 +1311,71 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
       <div id="settings-backup" className="card" style={{ marginBottom: '1rem' }}>
         <div className="section-title">Automatic Backup</div>
         <p style={{ fontSize: '0.85rem', color: 'var(--text-2)', marginBottom: '0.75rem' }}>
-          Creates unencrypted JSON backups on startup. Oldest backup is overwritten when the limit is reached.
+          Copies the saved data file (still encrypted if the file is encrypted) on startup, every 30 minutes after changes, and before imports, merges and purges. The oldest backup is deleted when the limit is reached.
         </p>
         <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', marginBottom: '0.75rem' }}>
           <input
             type="checkbox"
-            checked={backupEnabled}
-            onChange={(e) => { setBackupEnabled(e.target.checked); saveBackupSettings(e.target.checked, backupCount, backupDir); }}
+            checked={backupSettings.enabled}
+            onChange={(e) => { void updateBackupSettings({ enabled: e.target.checked }); }}
             style={{ width: 16, height: 16 }}
           />
           <span style={{ fontSize: '0.875rem' }}>Enable automatic backups</span>
         </label>
-        {backupEnabled && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-            <div className="field">
-              <label>Number of backups to keep (1–5)</label>
-              <input
-                type="number" min="1" max="5"
-                value={backupCount}
-                onChange={(e) => { const v = Math.max(1, Math.min(5, parseInt(e.target.value) || 1)); setBackupCount(v); saveBackupSettings(backupEnabled, v, backupDir); }}
-                style={{ maxWidth: 80 }}
-              />
-            </div>
-            <div className="field">
-              <label>Backup directory</label>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <input
-                  value={backupDir}
-                  onChange={(e) => { setBackupDir(e.target.value); if (!backupSaveRef.current) { backupSaveRef.current = true; setTimeout(() => { backupSaveRef.current = false; saveBackupSettings(backupEnabled, backupCount, e.target.value); }, 500); } }}
-                  placeholder="/home/user/backups"
-                  style={{ flex: 1, fontSize: '0.82rem' }}
-                />
-                <button className="btn btn-ghost btn-sm" onClick={async () => {
-                  const { open: openDir } = await import('@tauri-apps/plugin-dialog');
-                  const dir = await openDir({ directory: true, multiple: false });
-                  if (dir && typeof dir === 'string') { setBackupDir(dir); saveBackupSettings(backupEnabled, backupCount, dir); }
-                }}>Browse</button>
-              </div>
-            </div>
-            {backupDir && <p style={{ fontSize: '0.8rem', color: 'var(--text-3)' }}>Backups saved as <code>kestl-backup-*.json</code> in {backupDir}</p>}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+          <div className="field">
+            <label>Number of backups to keep</label>
+            <input
+              type="number" min="1" max="50"
+              value={backupSettings.maxCount}
+              onChange={(e) => { const v = Math.max(1, Math.min(50, parseInt(e.target.value) || 1)); void updateBackupSettings({ maxCount: v }); }}
+              style={{ maxWidth: 80 }}
+            />
           </div>
-        )}
+          <div className="field">
+            <label>Backup folder (this computer only)</label>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <input
+                value={backupDir}
+                onChange={(e) => { setBackupDir(e.target.value); if (filePath) persistBackupDir(filePath, e.target.value); }}
+                placeholder="/home/user/backups"
+                style={{ flex: 1, fontSize: '0.82rem' }}
+              />
+              <button className="btn btn-ghost btn-sm" onClick={async () => {
+                const { open: openDir } = await import('@tauri-apps/plugin-dialog');
+                const dir = await openDir({ directory: true, multiple: false });
+                if (dir && typeof dir === 'string') { setBackupDir(dir); if (filePath) persistBackupDir(filePath, dir); }
+              }}>Browse</button>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => { void runBackup('manual'); }}>Back up now</button>
+            <span style={{ fontSize: '0.8rem', color: lastBackupError ? '#dc2626' : 'var(--text-3)' }}>
+              {lastBackupError
+                ? `Last backup failed: ${lastBackupError}`
+                : lastBackupAt ? `Last backup: ${new Date(lastBackupAt).toLocaleString()}` : 'No backup yet this session'}
+            </span>
+          </div>
+          {plainBackups.length > 0 && (
+            <div style={{ fontSize: '0.82rem', color: '#b45309' }}>
+              {plainBackups.length} older backup{plainBackups.length === 1 ? '' : 's'} in this folder {plainBackups.length === 1 ? 'is' : 'are'} not encrypted.{' '}
+              {confirmDeletePlain ? (
+                <>
+                  <button className="btn btn-danger btn-sm" onClick={async () => {
+                    for (const f of plainBackups) {
+                      try { await invoke('delete_file', { path: f }); } catch { /* ignore */ }
+                    }
+                    setConfirmDeletePlain(false);
+                    setPlainBackups([]);
+                  }}>Confirm delete</button>{' '}
+                  <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDeletePlain(false)}>Cancel</button>
+                </>
+              ) : (
+                <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDeletePlain(true)}>Delete unencrypted backups</button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {filePath && (
@@ -1270,6 +1395,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                 const path = selected;
                 try {
                   await loadFromFile(path);
+                  void runStartupJobs().catch((e) => alert(`Startup tasks failed: ${String(e)}`));
                 } catch (e) {
                   if (String(e).includes('FILE_ENCRYPTED')) {
                     setPendingEncryptedPath(path);
@@ -1339,7 +1465,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                 const monthLabel = new Date(parseInt(purgeYear), parseInt(purgeMonthNum) - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
                 const inMonth = data.transactions.filter((t) => t.txnDate.slice(0, 7) === purgeMonth);
                 const count = purgeInstrument === 'PayPal'
-                  ? inMonth.filter((t) => t.linkedTransactionId === -1 || t.instrument === 'PayPal').length
+                  ? inMonth.filter((t) => isPaypalLinked(t) || t.instrument === 'PayPal').length
                   : inMonth.filter((t) => !purgeInstrument || t.instrument === purgeInstrument).length;
                 setPurgeConfirm({ mode: 'month', month: purgeMonth, label: monthLabel, count, instrument: purgeInstrument });
               } else {
@@ -1389,8 +1515,10 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                   setPurgeConfirm(null);
                   let deleted: number;
                   if (mode === 'instrument') {
+                    await runBackup('pre-purge');
                     deleted = await purgeTransactionsByInstrument(instrument);
                   } else {
+                    await runBackup('pre-purge');
                     deleted = await purgeTransactionsByMonth(month, instrument || undefined);
                   }
                   setPurgeYear('');
@@ -1614,6 +1742,10 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
           <div className="field">
             <label>Day of month</label>
             <input type="number" min="1" max="31" value={tmplDay} onChange={(e) => setTmplDay(e.target.value)} />
+          </div>
+          <div className="field">
+            <label>Start month</label>
+            <input type="month" value={tmplStartMonth} onChange={(e) => setTmplStartMonth(e.target.value)} />
           </div>
           <button className="btn btn-primary" onClick={handleAddTemplate} style={{ alignSelf: 'center', flex: '0 0 auto' }}>Add Template</button>
         </div>

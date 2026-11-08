@@ -15,6 +15,7 @@ import {
 import { processSchedules, getBucketBalance } from '../logic/savings';
 import { SearchableSelect } from './SearchableSelect';
 import { formatAmount } from '../utils/format';
+import { isCredit } from '../logic/txnKind';
 
 interface DisplayEntry {
   key: string;
@@ -80,7 +81,7 @@ export function SavingsView() {
       const txnEntries: DisplayEntry[] = [];
       if (linkedCatIds.size > 0) {
         for (const t of transactions) {
-          if (t.ignoreInBudget) continue;
+          if (isCredit(t)) continue;
           const splits = splitsByTxn.get(t.id);
           if (splits && splits.length > 0) {
             for (const s of splits) {

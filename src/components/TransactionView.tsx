@@ -7,16 +7,18 @@ import {
   updateTransaction,
   deleteTransactions,
   addCategoryRule,
+  withUndo,
   type Transaction,
-  type TransactionSplit,
 } from '../db';
-import { bulkCategorizeByDescriptor, bulkApplySplitRule, batchGetGuessScores } from '../logic/categorize';
+import { getSplitsIndex, isCategorized as txnIsCategorized } from '../logic/spend';
+import { bulkCategorizeByDescriptor, bulkApplySplitRule, bulkMarkTransferByDescriptor, batchGetGuessScores } from '../logic/categorize';
 import { findRefundCandidates, applyRefundToOriginalMonth, type RefundCandidate } from '../logic/refunds';
 import { SplitEditor } from './SplitEditor';
 import { SearchableSelect } from './SearchableSelect';
 import { TransactionLookup } from './TransactionLookup';
 import { formatAmount } from '../utils/format';
 import type { CategorySuggestion } from '../logic/llm';
+import { isCredit, isPaypalLinked } from '../logic/txnKind';
 
 function currentMonth(): string {
   const d = new Date();
@@ -58,6 +60,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [ruleAmount, setRuleAmount] = useState('');
   const [ruleAmountRequired, setRuleAmountRequired] = useState(false);
   const [ruleIsSplit, setRuleIsSplit] = useState(false);
+  const [ruleMarkTransfer, setRuleMarkTransfer] = useState(false);
   const [ruleSplitType, setRuleSplitType] = useState<'%' | '$'>('%');
   const [ruleSplits, setRuleSplits] = useState<Array<{ categoryId: number | ''; amount: string }>>([
     { categoryId: '', amount: '' },
@@ -107,6 +110,9 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [instrumentFilter, setInstrumentFilter] = useState<string>('');
   const [offBudgetFilter, setOffBudgetFilter] = useState(false);
   const [starredFilter, setStarredFilter] = useState(false);
+  const [transferFilter, setTransferFilter] = useState(false);
+  const PAGE = 300;
+  const [limit, setLimit] = useState(PAGE);
   const navFilterApplied = useRef(false);
 
   // Apply nav filter from external navigation (e.g. clicking "Spent" in Budget view)
@@ -122,23 +128,19 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     if (!navFilter) { navFilterApplied.current = false; }
   }, [navFilter, onNavConsumed]);
 
-  const splitsMap = useMemo(() => {
-    const m = new Map<number, TransactionSplit[]>();
-    for (const s of allSplits) {
-      const arr = m.get(s.transactionId) ?? [];
-      arr.push(s);
-      m.set(s.transactionId, arr);
-    }
-    return m;
-  }, [allSplits]);
+  const splitsMap = useMemo(() => getSplitsIndex({ transactionSplits: allSplits }), [allSplits]);
 
   const catMap = useMemo(() => new Map(categories.map((c) => [c.id!, c.name])), [categories]);
   const catColorMap = useMemo(() => new Map(categories.map((c) => [c.id!, c.color ?? '#888'])), [categories]);
-  const categoryOptions = useMemo(() => categories.map((c) => ({ value: c.id, label: c.name })), [categories]);
+  const categoryOptions = useMemo(() => categories.filter((c) => !c.archived).map((c) => ({ value: c.id, label: c.name })), [categories]);
+  const filterCategoryOptions = useMemo(() => categories.map((c) => ({ value: c.id, label: c.archived ? `${c.name} (archived)` : c.name })), [categories]);
   const instrumentOptions = useMemo(() =>
     [...new Set(allTransactions.map((t) => t.instrument).filter(Boolean))].sort().map((i) => ({ value: i, label: i })),
     [allTransactions],
   );
+
+  // Reset pagination when filters change
+  useEffect(() => { setLimit(PAGE); }, [monthFilter, catFilter, categoryFilter, instrumentFilter, starredFilter, offBudgetFilter, transferFilter, search]);
 
   const txns = useMemo(() => {
     const monthStart = `${month}-01`;
@@ -146,14 +148,9 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     let result = allTransactions
       .filter((t) => monthFilter === 'all' || (t.txnDate >= monthStart && t.txnDate <= monthEnd))
       .sort((a, b) => (b.txnDate > a.txnDate ? 1 : b.txnDate < a.txnDate ? -1 : b.id - a.id));
-    if (catFilter === 'categorized') result = result.filter((t) => {
-      const splits = splitsMap.get(t.id);
-      return t.categoryId != null || (splits && splits.length > 0);
-    });
-    if (catFilter === 'uncategorized') result = result.filter((t) => {
-      const splits = splitsMap.get(t.id);
-      return t.categoryId == null && (!splits || splits.length === 0);
-    });
+    if (transferFilter) result = result.filter((t) => t.isTransfer);
+    if (catFilter === 'categorized') result = result.filter((t) => !t.isTransfer && txnIsCategorized(t, splitsMap));
+    if (catFilter === 'uncategorized') result = result.filter((t) => !t.isTransfer && !txnIsCategorized(t, splitsMap));
     if (categoryFilter !== '') result = result.filter((t) => {
       const splits = splitsMap.get(t.id);
       if (splits && splits.length > 0) return splits.some((s) => s.categoryId === categoryFilter);
@@ -183,12 +180,12 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       });
     }
     return result;
-  }, [allTransactions, monthFilter, month, catFilter, categoryFilter, instrumentFilter, starredFilter, offBudgetFilter, search, splitsMap, catMap, budgets]);
+  }, [allTransactions, monthFilter, month, catFilter, categoryFilter, instrumentFilter, starredFilter, offBudgetFilter, transferFilter, search, splitsMap, catMap, budgets, categories]);
 
   // Suggestions scored against all uncategorized transactions — not filtered by visible txns,
   // so month/search filter changes don't retrigger batchGetGuessScores.
   const { allSuggestions, historyScoresMap } = useMemo(() => {
-    const uncatAll = allTransactions.filter((t) => t.categoryId == null && !t.ignoreInBudget);
+    const uncatAll = allTransactions.filter((t) => t.categoryId == null && !isCredit(t) && !t.isTransfer && !splitsMap.has(t.id));
     const queries = uncatAll.map((t) => ({ id: t.id, descriptor: t.descriptor }));
     const scoresMap = batchGetGuessScores(queries, allTransactions);
     const suggestions = new Map<number, CategorySuggestion>();
@@ -204,12 +201,12 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       if (cat) suggestions.set(t.id, { txnId: t.id, categoryId: catId, categoryName: cat.name });
     }
     return { allSuggestions: suggestions, historyScoresMap: scoresMap };
-  }, [allTransactions, categories]);
+  }, [allTransactions, categories, splitsMap]);
 
-  const uncatCount = useMemo(() => allTransactions.filter((t) => {
-    const splits = splitsMap.get(t.id);
-    return t.categoryId == null && (!splits || splits.length === 0);
-  }).length, [allTransactions, splitsMap]);
+  const uncatCount = useMemo(
+    () => allTransactions.filter((t) => !t.isTransfer && !txnIsCategorized(t, splitsMap)).length,
+    [allTransactions, splitsMap],
+  );
 
   async function assignCategory(txnId: number, categoryId: number | null) {
     await updateTransaction(txnId, { categoryId });
@@ -223,6 +220,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     setRuleAmount(txn.amount ? String(txn.amount) : '');
     setRuleAmountRequired(false);
     setRuleIsSplit(false);
+    setRuleMarkTransfer(false);
     setRuleSplitType('%');
     setRuleSplits([
       { categoryId: '', amount: '' },
@@ -235,36 +233,54 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     const hasDollarSplit = ruleIsSplit && ruleSplitType === '$';
     const amountVal = (ruleAmountRequired || hasDollarSplit) && ruleAmount.trim() ? parseFloat(ruleAmount) : null;
 
+    if (ruleMarkTransfer) {
+      await withUndo('Create transfer rule', async () => {
+        await addCategoryRule({ matchType: ruleType, pattern: rulePattern.toLowerCase(), categoryId: 0, amountMatch: amountVal, markTransfer: true });
+        const count = await bulkMarkTransferByDescriptor(rulePattern, ruleType, amountVal);
+        setRuleModal(null);
+        alert(`Rule created. ${count} transaction${count !== 1 ? 's' : ''} marked as transfer.`);
+      });
+      return;
+    }
+
     if (ruleIsSplit) {
       const validSplits = ruleSplits.filter((s) => s.categoryId !== '' && s.amount.trim() !== '');
       if (validSplits.length < 2) return;
       if (hasDollarSplit && !amountVal) return; // $ splits require amount
+      if (ruleSplitType === '%') {
+        const pct = validSplits.reduce((sum, s) => sum + (parseFloat(s.amount) || 0), 0);
+        if (Math.abs(pct - 100) >= 0.01) return; // percent splits must total 100
+      }
       const primaryCatId = validSplits[0].categoryId as number;
       const splitItems = validSplits.map((s) => ({
         categoryId: s.categoryId as number,
         ...(ruleSplitType === '%' ? { percent: parseFloat(s.amount) } : { amount: parseFloat(s.amount) }),
       }));
-      await addCategoryRule({
-        matchType: ruleType,
-        pattern: rulePattern.toLowerCase(),
-        categoryId: primaryCatId,
-        amountMatch: amountVal,
-        splits: splitItems,
+      await withUndo('Create split rule', async () => {
+        await addCategoryRule({
+          matchType: ruleType,
+          pattern: rulePattern.toLowerCase(),
+          categoryId: primaryCatId,
+          amountMatch: amountVal,
+          splits: splitItems,
+        });
+        const count = await bulkApplySplitRule(rulePattern, ruleType, amountVal, splitItems);
+        setRuleModal(null);
+        alert(`Split rule created. ${count} transaction${count !== 1 ? 's' : ''} split.`);
       });
-      const count = await bulkApplySplitRule(rulePattern, ruleType, amountVal, splitItems);
-      setRuleModal(null);
-      alert(`Split rule created. ${count} transaction${count !== 1 ? 's' : ''} split.`);
     } else {
       if (!ruleCatId) return;
-      await addCategoryRule({
-        matchType: ruleType,
-        pattern: rulePattern.toLowerCase(),
-        categoryId: ruleCatId as number,
-        amountMatch: amountVal,
+      await withUndo('Create rule', async () => {
+        await addCategoryRule({
+          matchType: ruleType,
+          pattern: rulePattern.toLowerCase(),
+          categoryId: ruleCatId as number,
+          amountMatch: amountVal,
+        });
+        const count = await bulkCategorizeByDescriptor(rulePattern, ruleCatId as number, ruleType, amountVal ?? undefined);
+        setRuleModal(null);
+        alert(`Rule created. ${count} transactions categorized.`);
       });
-      const count = await bulkCategorizeByDescriptor(rulePattern, ruleCatId as number, ruleType, amountVal ?? undefined);
-      setRuleModal(null);
-      alert(`Rule created. ${count} transactions categorized.`);
     }
   }
 
@@ -437,6 +453,13 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
           Uncategorized
         </button>
         <button
+          className={`btn ${transferFilter ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ fontSize: '0.875rem', padding: '0.3rem 0.6rem' }}
+          onClick={() => setTransferFilter(!transferFilter)}
+        >
+          Transfers
+        </button>
+        <button
           className={`btn ${starredFilter ? 'btn-primary' : 'btn-ghost'}`}
           style={{ fontSize: '0.875rem', padding: '0.3rem 0.6rem' }}
           onClick={() => setStarredFilter(!starredFilter)}
@@ -444,7 +467,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
           ★ Starred
         </button>
         <SearchableSelect
-          options={categoryOptions}
+          options={filterCategoryOptions}
           value={categoryFilter}
           onChange={(v) => {
             const newVal = v === '' ? '' : Number(v);
@@ -550,23 +573,24 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
           <tbody>
             {(() => {
               let catIdx = 0, uncatIdx = 0;
-              return txns.map((t) => {
+              return txns.slice(0, limit).map((t) => {
               const splits = t.id !== undefined ? splitsMap.get(t.id) : undefined;
-              const isCategorized = t.categoryId != null || (splits != null && splits.length > 0);
-              const rowClass = isCategorized
+              const isCategorized = t.isTransfer || t.categoryId != null || (splits != null && splits.length > 0);
+              const rowClass = t.isTransfer ? 'txn-row-categorized' : isCategorized
                 ? `txn-row-categorized ${catIdx++ % 2 === 0 ? '' : 'txn-row-categorized-alt'}`
                 : `txn-row-uncat ${uncatIdx++ % 2 === 0 ? '' : 'txn-row-uncat-alt'}`;
               return (
-                <tr key={t.id} className={rowClass}>
+                <tr key={t.id} className={rowClass} style={t.isTransfer ? { opacity: 0.55 } : undefined}>
                   <td style={{ whiteSpace: 'nowrap' }}>{t.txnDate}</td>
                   <td className="descriptor-cell" data-tooltip={t.descriptor} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
                     <span className="descriptor-text">{t.descriptor}</span>
-                    {t.linkedTransactionId === -1 && <span className="chip" style={{ marginLeft: '4px', background: '#8b5cf6', color: '#fff' }}>PayPal</span>}
-                    {t.linkedTransactionId && t.linkedTransactionId !== -1 && <span className="chip" style={{ marginLeft: '4px' }}>linked</span>}
+                    {t.isTransfer && <span className="chip" style={{ marginLeft: '4px', background: '#64748b', color: '#fff' }}>Transfer</span>}
+                    {isPaypalLinked(t) && <span className="chip" style={{ marginLeft: '4px', background: '#8b5cf6', color: '#fff' }}>PayPal</span>}
+                    {t.linkedTransactionId && !isPaypalLinked(t) && <span className="chip" style={{ marginLeft: '4px' }}>linked</span>}
                   </td>
                   <td>{t.instrument}</td>
-                  <td className={`num budget-num ${t.ignoreInBudget || t.amount < 0 ? 'positive' : 'txn-neg'}`}>
-                    {t.amount === 0 ? '' : t.ignoreInBudget || t.amount < 0 ? '+' : '-'}${formatAmount(Math.abs(t.amount))}
+                  <td className={`num budget-num ${isCredit(t) || t.amount < 0 ? 'positive' : 'txn-neg'}`}>
+                    {t.amount === 0 ? '' : isCredit(t) || t.amount < 0 ? '+' : '-'}${formatAmount(Math.abs(t.amount))}
                   </td>
                   <td>
                     {splits && splits.length > 0 ? (
@@ -655,6 +679,13 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                         🏷
                       </button>
                     )}
+                    <button
+                      className={`btn btn-sm ${t.isTransfer ? 'btn-warning' : 'btn-ghost'}`}
+                      onClick={() => updateTransaction(t.id, { isTransfer: t.isTransfer ? undefined : true })}
+                      title={t.isTransfer ? 'Unmark transfer' : 'Mark as transfer between your own accounts'}
+                    >
+                      ⇄
+                    </button>
                     <button className="btn btn-ghost btn-sm" onClick={() => openRuleModal(t)} title="Create rule">
                       Create Rule
                     </button>
@@ -699,6 +730,13 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
               );
             });
             })()}
+            {txns.length > limit && (
+              <tr><td colSpan={6} style={{ textAlign: 'center' }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => setLimit((l) => l + PAGE)}>
+                  Show more ({txns.length - limit} remaining)
+                </button>
+              </td></tr>
+            )}
             {txns.length === 0 && (
               <tr><td colSpan={6} className="empty">{monthFilter === 'all' ? 'No transactions' : 'No transactions this month'}</td></tr>
             )}
@@ -729,7 +767,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                   placeholder="Match type"
                 />
               </div>
-              {!ruleIsSplit && (
+              {!ruleIsSplit && !ruleMarkTransfer && (
                 <div className="field">
                   <label>Category</label>
                   <SearchableSelect
@@ -740,6 +778,11 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                   />
                 </div>
               )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.65rem' }}>
+              <input type="checkbox" id="rule-transfer-cb" checked={ruleMarkTransfer} onChange={(e) => { setRuleMarkTransfer(e.target.checked); if (e.target.checked) setRuleIsSplit(false); }} />
+              <label htmlFor="rule-transfer-cb" style={{ fontSize: '0.85rem', cursor: 'pointer' }}>Mark as transfer (not spending or income)</label>
             </div>
 
             {/* Split toggle */}
@@ -798,7 +841,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                     const txnAmt = Math.abs(ruleModal.amount);
                     const ok = Math.abs(total - txnAmt) < 0.01;
                     return <span style={{ fontSize: '0.75rem', color: ok ? 'var(--green)' : 'var(--red)' }}>
-                      Total: ${total.toFixed(2)} / ${txnAmt.toFixed(2)}
+                      Total: ${total.toFixed(2)} / ${txnAmt.toFixed(2)}{!ok && ' — the remainder goes to the last category'}
                     </span>;
                   })()}
                 </div>
@@ -825,7 +868,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
             <div className="modal-actions">
               <button className="btn btn-ghost" onClick={() => setRuleModal(null)}>Cancel</button>
               <button className="btn btn-primary" onClick={createRule}>
-                {ruleIsSplit ? 'Create Split Rule' : 'Create & Apply'}
+                {ruleMarkTransfer ? 'Create Transfer Rule' : ruleIsSplit ? 'Create Split Rule' : 'Create & Apply'}
               </button>
             </div>
           </div>
@@ -922,7 +965,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
             <div className="card" style={{ marginBottom: '0.75rem' }}>
               <div style={{ fontWeight: 600 }}>{moveMonthTxn.descriptor}</div>
               <div style={{ fontSize: '0.85rem' }}>
-                {moveMonthTxn.ignoreInBudget ? '+' : '-'}${formatAmount(moveMonthTxn.amount)} — currently {moveMonthTxn.txnDate}
+                {isCredit(moveMonthTxn) ? '+' : '-'}${formatAmount(moveMonthTxn.amount)} — currently {moveMonthTxn.txnDate}
               </div>
             </div>
             <div className="row" style={{ gap: '0.5rem' }}>

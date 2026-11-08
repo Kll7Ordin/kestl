@@ -21,6 +21,8 @@ import {
   type MortgageConfig,
   type MortgageLedgerEntry,
   type PrepayFrequency,
+  getDisplaySettings,
+  updateDisplaySettings,
 } from '../db';
 import { SearchableSelect } from './SearchableSelect';
 import { DateInput } from './DateInput';
@@ -28,7 +30,6 @@ import { formatAmount } from '../utils/format';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
-const MORTGAGE_TAB_KEY = 'budget-app-show-mortgage-tab';
 
 // ── Currency input — shows comma-formatted value when blurred ─────────────────
 
@@ -159,9 +160,7 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
   const [internalTab, setInternalTab] = useState<InternalTab>(
     getMortgageConfig() ? 'overview' : 'setup',
   );
-  const [showMortgageTab, setShowMortgageTab] = useState(
-    () => localStorage.getItem(MORTGAGE_TAB_KEY) === 'true',
-  );
+  const [showMortgageTab, setShowMortgageTab] = useState(() => getDisplaySettings().showMortgageTab === true);
 
   // ── Setup form ──────────────────────────────────────────────────────────────
   const [setupBalance, setSetupBalance] = useState(() => String(getMortgageConfig()?.outstandingBalance ?? ''));
@@ -234,7 +233,7 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
   // ── Category options ─────────────────────────────────────────────────────
   const categoryOptions = useMemo(() => {
     const { categories } = getData();
-    return categories.map((c) => ({ value: String(c.id), label: c.name }));
+    return categories.filter((c) => !c.archived).map((c) => ({ value: String(c.id), label: c.name }));
   }, []);
 
   // Auto-guess mortgage payment category
@@ -419,7 +418,7 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
 
   function handleToggleMortgageTab(show: boolean) {
     setShowMortgageTab(show);
-    localStorage.setItem(MORTGAGE_TAB_KEY, String(show));
+    void updateDisplaySettings({ showMortgageTab: show });
     onShowMortgageTabChange?.(show);
   }
 

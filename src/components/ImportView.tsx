@@ -6,7 +6,8 @@ import {
   getData,
   subscribe,
   bulkAddTransactions,
-  setSplits,
+  setSplitsBulk,
+  withUndo,
   updateTransaction,
   addAmazonOrders,
   executeCustomParser,
@@ -20,8 +21,10 @@ import { detectDuplicates } from '../logic/duplicates';
 import { categorizeTransactionsInPlace } from '../logic/categorize';
 import { matchPaypalTransactions, confirmPaypalMatch, discardPaypalTransactions, type PaypalMatchCandidate } from '../logic/matching';
 import { findRefundCandidates, applyRefundToOriginalMonth, type RefundCandidate } from '../logic/refunds';
+import { runBackup } from '../backup';
 import { formatAmount } from '../utils/format';
 import { ParserGenerator } from './ParserGenerator';
+import { isCredit } from '../logic/txnKind';
 
 type ImportType = 'csv' | 'amazon' | 'paypal';
 
@@ -122,25 +125,28 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
     splitActions?: Array<{ txnIndex: number; splits: Array<{ categoryId: number; amount: number }> }>;
   }) {
     const { txnsToInsert, source, parsed, duplicatesDropped, splitActions = [] } = args;
-    const ids = await bulkAddTransactions(txnsToInsert);
-    // Apply split rules
-    for (const action of splitActions) {
-      const txnId = ids[action.txnIndex];
-      if (txnId == null) continue;
-      await setSplits(txnId, action.splits.map((s) => ({ categoryId: s.categoryId, amount: s.amount })));
-    }
-
+    await runBackup('pre-import');
+    let ids: number[] = [];
     let matched = 0;
-    if (source === 'paypal_paste') {
-      const { autoMatched, fuzzy, unmatched } = await matchPaypalTransactions(ids);
-      matched = autoMatched;
-      if (fuzzy.length > 0) setPaypalFuzzy(fuzzy);
-      if (unmatched.length > 0) setPaypalUnmatched(unmatched);
-    }
+    await withUndo('Import transactions', async () => {
+      ids = await bulkAddTransactions(txnsToInsert);
+      // Apply split rules in one save
+      await setSplitsBulk(
+        splitActions
+          .filter((a) => ids[a.txnIndex] != null)
+          .map((a) => ({ transactionId: ids[a.txnIndex], splits: a.splits.map((s) => ({ categoryId: s.categoryId, amount: s.amount })) })),
+      );
+      if (source === 'paypal_paste') {
+        const { autoMatched, fuzzy, unmatched } = await matchPaypalTransactions(ids);
+        matched = autoMatched;
+        if (fuzzy.length > 0) setPaypalFuzzy(fuzzy);
+        if (unmatched.length > 0) setPaypalUnmatched(unmatched);
+      }
+    });
 
     const { transactions } = getData();
     const insertedTxns = transactions.filter((t) => ids.includes(t.id));
-    const credits = insertedTxns.filter((t) => t.ignoreInBudget);
+    const credits = insertedTxns.filter((t) => isCredit(t));
     let refundCandidateCount = 0;
     if (credits.length > 0) {
       const creditIds = credits.map((t) => t.id);
@@ -236,7 +242,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
       // Try each custom parser in order
       for (const parser of customParsers) {
         try {
-          const customTxns = executeCustomParser(parser.code, text, name);
+          const customTxns = await executeCustomParser(parser.code, text, name);
           if (customTxns.length > 0) {
             const withInstrument = customTxns.map((t) => ({ ...t, instrument: parser.name }));
             await insertAndReport(withInstrument, `custom_${parser.id}`);
@@ -269,6 +275,8 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
         amount: o.amount,
         status: o.status,
       }));
+      await runBackup('pre-import');
+      await withUndo('Import Amazon orders', async () => {
       await addAmazonOrders(amazonOrders);
 
       const { transactions: existing } = getData();
@@ -326,10 +334,11 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
       const amazonSplits = categorizeTransactionsInPlace(toInsert);
       if (toInsert.length > 0) {
         const amazonIds = await bulkAddTransactions(toInsert);
-        for (const action of amazonSplits) {
-          const txnId = amazonIds[action.txnIndex];
-          if (txnId != null) await setSplits(txnId, action.splits.map((s) => ({ categoryId: s.categoryId, amount: s.amount })));
-        }
+        await setSplitsBulk(
+          amazonSplits
+            .filter((a) => amazonIds[a.txnIndex] != null)
+            .map((a) => ({ transactionId: amazonIds[a.txnIndex], splits: a.splits.map((s) => ({ categoryId: s.categoryId, amount: s.amount })) })),
+        );
       }
 
       setResult({
@@ -337,6 +346,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
         inserted: toInsert.length,
         duplicates: skipped,
         linkedOrders: overwritten || undefined,
+      });
       });
       setPasteText('');
     } catch (e) {

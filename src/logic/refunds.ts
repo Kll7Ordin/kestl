@@ -1,4 +1,5 @@
-import { getData, persistData, type Transaction } from '../db';
+import { getData, persistData, pushUndoSnapshot, type Transaction } from '../db';
+import { isCredit } from './txnKind';
 
 function normalize(s: string): string {
   return s.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -43,10 +44,10 @@ export function findRefundCandidates(creditIds: number[]): RefundCandidate[] {
 
   // Refund must be a credit (ignoreInBudget = true); original must be a debit (ignoreInBudget = false).
   const credits = transactions.filter(
-    (t) => creditIds.includes(t.id) && t.ignoreInBudget,
+    (t) => creditIds.includes(t.id) && isCredit(t),
   );
   const expenses = transactions.filter(
-    (t) => !t.ignoreInBudget && t.linkedTransactionId === null && t.txnDate >= cutoff,
+    (t) => !isCredit(t) && t.linkedTransactionId === null && t.txnDate >= cutoff,
   );
 
   const results: RefundCandidate[] = [];
@@ -82,6 +83,7 @@ export async function applyRefundToOriginalMonth(refundId: number, originalId: n
   const refund = transactions.find((t) => t.id === refundId);
   const original = transactions.find((t) => t.id === originalId);
   if (!refund || !original) return;
+  pushUndoSnapshot('Link refund');
 
   refund.txnDate = original.txnDate;
   refund.linkedTransactionId = originalId;

@@ -1,6 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
-import { buildSeedData, buildDemoData, DEFAULT_BUDGET_ITEMS, DEFAULT_SAVINGS, DEFAULT_SAVINGS_BALANCES, DEFAULT_SPLIT_TEMPLATES, INCOME_CATEGORY_NAMES } from './seed';
-import { isEncryptedFile, encryptData, decryptData } from './utils/crypto';
+import { buildSeedData, buildDemoData } from './seed';
+import { currentMonthStr, monthsBetween, prevMonth } from './logic/dateUtils';
+import { isEncryptedFile, createSessionKey, encryptWithKey, decryptWithPassword, type SessionKey } from './utils/crypto';
+import { isCredit, isPaypalLinked } from './logic/txnKind';
 
 export interface Category {
   id: number;
@@ -9,6 +11,9 @@ export interface Category {
   color?: string;     // hex color for UI chips
   note?: string;      // optional hover tooltip shown in budget view
   savingsBucketId?: number | null; // if set, transactions categorized here fill this savings bucket
+  archived?: boolean; // hidden from pickers; history still shows
+  rollover?: boolean; // unspent/overspent budget carries into the next month
+  rolloverStartMonth?: string; // YYYY-MM the carry starts from
 }
 
 // Palette: 30 visually distinct colors via golden-angle hue spread
@@ -28,26 +33,31 @@ function pickDistinctColor(existingCategories: Category[]): string {
 }
 
 export async function updateCategoryColor(id: number, color: string): Promise<void> {
+  pushUndoSnapshot('Update category color');
   const cat = data.categories.find((c) => c.id === id);
   if (cat) { cat.color = color; await persist(); }
 }
 
 export async function updateCategoryNote(id: number, note: string): Promise<void> {
+  pushUndoSnapshot('Update category note');
   const cat = data.categories.find((c) => c.id === id);
   if (cat) { cat.note = note || undefined; await persist(); }
 }
 
 export async function updateCategoryName(id: number, name: string): Promise<void> {
+  pushUndoSnapshot('Update category name');
   const cat = data.categories.find((c) => c.id === id);
   if (cat && name.trim()) { cat.name = name.trim(); await persist(); }
 }
 
 export async function updateCategoryBucket(id: number, bucketId: number | null): Promise<void> {
+  pushUndoSnapshot('Update category bucket');
   const cat = data.categories.find((c) => c.id === id);
   if (cat) { cat.savingsBucketId = bucketId ?? undefined; await persist(); }
 }
 
 export async function updateCategoryIsIncome(id: number, isIncome: boolean): Promise<void> {
+  pushUndoSnapshot('Update category is income');
   const cat = data.categories.find((c) => c.id === id);
   if (cat) { cat.isIncome = isIncome || undefined; await persist(); }
 }
@@ -65,6 +75,7 @@ export interface CategoryRule {
   categoryId: number;
   amountMatch?: number | null; // optional: rule only applies if txn amount equals this (within 0.01)
   splits?: SplitRuleItem[];    // if set, transaction is split into these categories instead
+  markTransfer?: boolean;      // if set, the rule marks matching transactions as transfers (categoryId is unused)
 }
 
 export interface BudgetGroup {
@@ -100,6 +111,7 @@ export interface Transaction {
   comment: string | null;
   starred?: boolean;
   starNote?: string | null;
+  isTransfer?: boolean; // movement between your own accounts; excluded from spend, income and suggestions
 }
 
 export interface TransactionSplit {
@@ -143,6 +155,9 @@ export interface RecurringTemplate {
   dayOfMonth: number;
   active: boolean;
   ignoreInBudget?: boolean; // true = income/credit transaction
+  startMonth?: string;      // YYYY-MM: first month to generate
+  skippedMonths?: string[]; // months whose occurrence was deleted/skipped (tombstones)
+  pausedAt?: string;        // YYYY-MM when the template was paused
 }
 
 export interface SplitTemplate {
@@ -205,6 +220,8 @@ export interface MergeLog {
   affectedTransactionIds: number[];
   affectedSplitIds: number[];
   affectedRuleIds: number[];
+  affectedBudgetIds?: number[];
+  affectedRecurringIds?: number[];
 }
 
 export interface AppData {
@@ -232,6 +249,7 @@ export interface AppData {
   mortgage?: MortgageConfig;
   mortgageLedger?: MortgageLedgerEntry[];
   mergeLogs?: MergeLog[];
+  backupSettings?: BackupSettings;
 }
 
 export interface ColorThresholds {
@@ -251,6 +269,14 @@ export const DEFAULT_COLOR_THRESHOLDS: ColorThresholds = {
 export interface DisplaySettings {
   ytdColumnsVisible: boolean;
   ytdMode: 'ytd' | 'rolling12';
+  experimentalEnabled?: boolean;
+  showMortgageTab?: boolean;
+  txnAiLookupEnabled?: boolean;
+}
+
+export interface BackupSettings {
+  enabled: boolean;
+  maxCount: number;
 }
 
 export const DEFAULT_DISPLAY_SETTINGS: DisplaySettings = {
@@ -280,52 +306,225 @@ let data: AppData = emptyData();
 let filePath: string | null = null;
 let listeners: Array<() => void> = [];
 let sessionPassword: string | null = null; // never written to disk
+let sessionKey: SessionKey | null = null;  // derived once per session; reused for every save
 
-// Undo stack — up to 3 pre-mutation snapshots (JSON strings)
-const _undoStack: string[] = [];
+// ── Undo: one snapshot per user action, up to 10 ───────────────────────────────
+const UNDO_LIMIT = 10;
+const _undoStack: { label: string; snap: string }[] = [];
 let _undoListeners: Array<() => void> = [];
+let _undoSuppress = 0;
 
-export function pushUndoSnapshot(): void {
-  _undoStack.push(JSON.stringify(data));
-  if (_undoStack.length > 3) _undoStack.shift();
-  for (const fn of _undoListeners) fn();
+function notifyUndo() { for (const fn of _undoListeners) fn(); }
+
+export function pushUndoSnapshot(label: string): void {
+  if (_undoSuppress > 0) return;
+  _undoStack.push({ label, snap: JSON.stringify(data) });
+  if (_undoStack.length > UNDO_LIMIT) _undoStack.shift();
+  notifyUndo();
+}
+
+/** Run `fn` as ONE undoable user action: pushes a single snapshot, then suppresses nested ones. */
+export async function withUndo<T>(label: string, fn: () => Promise<T>): Promise<T> {
+  pushUndoSnapshot(label);
+  _undoSuppress++;
+  try { return await fn(); } finally { _undoSuppress--; }
+}
+
+/** Run background jobs (startup cleanup, recurring generation) without creating undo snapshots. */
+export async function withoutUndo<T>(fn: () => Promise<T>): Promise<T> {
+  _undoSuppress++;
+  try { return await fn(); } finally { _undoSuppress--; }
 }
 
 export async function undo(): Promise<boolean> {
-  const snap = _undoStack.pop();
-  if (!snap) return false;
-  const parsed = JSON.parse(snap);
-  data = { ...emptyData(), ...parsed };
-  if (filePath) {
-    const json = JSON.stringify(data, null, 2);
-    const fileContent = sessionPassword ? await encryptData(json, sessionPassword) : json;
-    await invoke('save_data', { path: filePath, data: fileContent });
-  }
-  data = { ...data };
-  for (const fn of listeners) fn();
-  for (const fn of _undoListeners) fn();
+  const entry = _undoStack.pop();
+  if (!entry) return false;
+  data = { ...emptyData(), ...JSON.parse(entry.snap) };
+  await persist();
+  notifyUndo();
   return true;
 }
 
 export function canUndo(): boolean { return _undoStack.length > 0; }
+
+export function getUndoLabel(): string | null {
+  return _undoStack.length > 0 ? _undoStack[_undoStack.length - 1].label : null;
+}
 
 export function subscribeUndo(fn: () => void): () => void {
   _undoListeners = [..._undoListeners, fn];
   return () => { _undoListeners = _undoListeners.filter((l) => l !== fn); };
 }
 
+/** Test-only: replace in-memory data. Never call from app code. */
+export function __setDataForTests(d: AppData): void {
+  data = { ...emptyData(), ...structuredClone(d) };
+  filePath = null;
+  sessionPassword = null;
+  sessionKey = null;
+  _undoStack.length = 0;
+  resetSaveState();
+}
+
+/** Test-only: pretend a file is open so the save pipeline runs (with `invoke` mocked). */
+export function __setFilePathForTests(p: string | null): void {
+  filePath = p;
+  resetSaveState();
+}
+
+function nextMonthStr(m: string): string {
+  const [y, mo] = m.split('-').map(Number);
+  const d = new Date(y, mo, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
 function nextId(): number {
   return data.nextId++;
 }
 
-async function persist() {
+// ── Save pipeline: UI updates immediately, disk write is debounced, atomic and conflict-checked ──
+export type SaveStatus = 'idle' | 'pending' | 'saving' | 'error' | 'conflict';
+interface SaveInfo { status: SaveStatus; error?: string; lastSavedAt?: number }
+let saveInfo: SaveInfo = { status: 'idle' };
+let saveListeners: Array<() => void> = [];
+let lastKnownMtime: number | null = null;
+let dirty = false;
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let saveInFlight: Promise<void> | null = null;
+let notifyQueued = false;
+let retryCount = 0;
+let saveCount = 0;
+const SAVE_DEBOUNCE_MS = 400;
+const RETRY_DELAYS_MS = [2000, 5000, 15000];
+
+const ARRAY_KEYS = ['categories', 'categoryRules', 'budgetGroups', 'budgets', 'transactions', 'transactionSplits',
+  'savingsBuckets', 'savingsEntries', 'savingsSchedules', 'recurringTemplates', 'splitTemplates',
+  'amazonOrders', 'customParsers', 'experimentalBudgets', 'mortgageLedger', 'mergeLogs', 'aiCategoryFeedback'] as const;
+
+/** Give every array a new reference so React memos keyed on them re-run. */
+function refreshRefs() {
+  const next: AppData = { ...data };
+  for (const k of ARRAY_KEYS) {
+    const v = next[k];
+    if (Array.isArray(v)) (next as unknown as Record<string, unknown>)[k] = [...v];
+  }
+  data = next;
+}
+
+function queueNotify() {
+  if (notifyQueued) return;
+  notifyQueued = true;
+  queueMicrotask(() => { notifyQueued = false; for (const fn of listeners) fn(); });
+}
+
+function setSaveInfo(patch: SaveInfo) {
+  saveInfo = { ...saveInfo, error: undefined, ...patch };
+  for (const fn of saveListeners) fn();
+}
+
+function resetSaveState() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  dirty = false;
+  retryCount = 0;
+  lastKnownMtime = null;
+  saveInfo = { status: 'idle' };
+  for (const fn of saveListeners) fn();
+}
+
+export function getSaveStatus(): SaveInfo { return saveInfo; }
+export function getSaveCount(): number { return saveCount; }
+export function subscribeSaveStatus(fn: () => void): () => void {
+  saveListeners = [...saveListeners, fn];
+  return () => { saveListeners = saveListeners.filter((l) => l !== fn); };
+}
+
+function scheduleSave(delay = SAVE_DEBOUNCE_MS) {
+  dirty = true;
+  if (saveInfo.status === 'conflict') return;
+  if (saveInfo.status !== 'pending' && saveInfo.status !== 'saving') setSaveInfo({ status: 'pending' });
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { saveTimer = null; void runSave(); }, delay);
+}
+
+/** Called by every mutator. Updates the UI right away; the disk write happens later. */
+async function persist(): Promise<void> {
+  refreshRefs();
+  queueNotify();
+  if (filePath) scheduleSave();
+}
+
+async function doSave(): Promise<void> {
+  const path = filePath;
+  if (!path) return;
+  dirty = false;
+  setSaveInfo({ status: 'saving' });
+  try {
+    let content = sessionKey ? JSON.stringify(data) : JSON.stringify(data, null, 2);
+    if (sessionKey) content = await encryptWithKey(content, sessionKey);
+    const mtime = await invoke<number>('save_data', { path, data: content, expectedMtime: lastKnownMtime });
+    if (filePath !== path) return; // file was switched while saving
+    lastKnownMtime = mtime;
+    saveCount++;
+    retryCount = 0;
+    if (dirty) setSaveInfo({ status: 'pending', lastSavedAt: Date.now() });
+    else setSaveInfo({ status: 'idle', lastSavedAt: Date.now() });
+  } catch (e) {
+    if (filePath !== path) return;
+    dirty = true;
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes('CONFLICT')) {
+      setSaveInfo({ status: 'conflict' });
+    } else {
+      setSaveInfo({ status: 'error', error: msg });
+      if (retryCount < RETRY_DELAYS_MS.length) {
+        const delay = RETRY_DELAYS_MS[retryCount++];
+        if (saveTimer) clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => { saveTimer = null; void runSave(); }, delay);
+      }
+    }
+  }
+}
+
+async function runSave(): Promise<void> {
+  if (saveInFlight) await saveInFlight;
+  if (!dirty || !filePath || saveInfo.status === 'conflict') return;
+  if (saveInFlight) return; // another caller started one while we waited
+  saveInFlight = doSave().finally(() => { saveInFlight = null; });
+  await saveInFlight;
+}
+
+/** Write any pending changes now. Throws if the final status is error or conflict. */
+export async function flushSave(): Promise<void> {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  for (let i = 0; i < 5; i++) {
+    if (saveInFlight) await saveInFlight;
+    if (!dirty || !filePath) break;
+    if (saveInfo.status === 'conflict') break;
+    await runSave();
+    if (saveInfo.status === 'error') break;
+  }
+  if (saveInfo.status === 'error') throw new Error(saveInfo.error ?? 'Save failed');
+  if (saveInfo.status === 'conflict') throw new Error('CONFLICT');
+}
+
+/** Retry after an error: reset the backoff and write now. */
+export async function retrySave(): Promise<void> {
+  retryCount = 0;
+  dirty = true;
+  if (saveInfo.status === 'error') setSaveInfo({ status: 'pending' });
+  await flushSave();
+}
+
+export async function resolveConflict(choice: 'overwrite' | 'reload'): Promise<void> {
   if (!filePath) return;
-  const json = JSON.stringify(data, null, 2);
-  const fileContent = sessionPassword ? await encryptData(json, sessionPassword) : json;
-  await invoke('save_data', { path: filePath, data: fileContent });
-  // Create a new reference so useSyncExternalStore detects the change
-  data = { ...data };
-  for (const fn of listeners) fn();
+  if (choice === 'overwrite') {
+    lastKnownMtime = null;
+    dirty = true;
+    setSaveInfo({ status: 'pending' });
+    await flushSave();
+  } else {
+    await loadFromFile(filePath, sessionPassword ?? undefined, { discardUnsaved: true });
+  }
 }
 
 export function subscribe(fn: () => void): () => void {
@@ -341,17 +540,41 @@ export async function getLastFilePath(): Promise<string | null> {
   return invoke<string | null>('get_last_file_path');
 }
 
-export async function loadFromFile(path: string, password?: string): Promise<void> {
+function resetForNewFile() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+  _undoStack.length = 0;
+  notifyUndo();
+  resetSaveState();
+}
+
+export async function loadFromFile(
+  path: string,
+  password?: string,
+  opts: { discardUnsaved?: boolean } = {},
+): Promise<void> {
+  // Make sure the file we're leaving is fully written before touching anything.
+  if (filePath && !opts.discardUnsaved) await flushSave();
+
   const raw = await invoke<string>('load_data', { path });
   let jsonStr = raw;
+  let newKey: SessionKey | null = null;
+  let newPassword: string | null = null;
+  let needsUpgrade = false;
   if (isEncryptedFile(raw)) {
     if (!password) throw new Error('FILE_ENCRYPTED');
-    jsonStr = await decryptData(raw, password);
-    sessionPassword = password;
-  } else {
-    sessionPassword = null;
+    const r = await decryptWithPassword(raw, password);
+    jsonStr = r.plaintext;
+    newKey = r.sessionKey;
+    newPassword = password;
+    needsUpgrade = r.needsUpgrade;
   }
   const parsed = JSON.parse(jsonStr);
+  const mtime = await invoke<number | null>('file_mtime', { path });
+
+  // Everything succeeded — now switch state.
+  resetForNewFile();
+  sessionKey = newKey;
+  sessionPassword = newPassword;
   data = { ...emptyData(), ...parsed };
   if (!data.recurringTemplates) data.recurringTemplates = [];
   if (!data.splitTemplates) data.splitTemplates = [];
@@ -365,8 +588,11 @@ export async function loadFromFile(path: string, password?: string): Promise<voi
     if (t.sourceRef == null) t.sourceRef = '';
   }
   filePath = path;
+  lastKnownMtime = mtime;
   await invoke('set_file_path', { path });
+  refreshRefs();
   for (const fn of listeners) fn();
+  if (needsUpgrade) { await persist(); await flushSave(); }
 }
 
 export function isCurrentFileEncrypted(): boolean {
@@ -375,20 +601,26 @@ export function isCurrentFileEncrypted(): boolean {
 
 export async function enableEncryption(password: string): Promise<void> {
   if (!password) throw new Error('Password cannot be empty');
+  sessionKey = await createSessionKey(password);
   sessionPassword = password;
   await persist();
+  await flushSave();
 }
 
 export async function changeEncryptionPassword(oldPassword: string, newPassword: string): Promise<void> {
   if (sessionPassword !== oldPassword) throw new Error('Current password is incorrect');
   if (!newPassword) throw new Error('New password cannot be empty');
+  sessionKey = await createSessionKey(newPassword);
   sessionPassword = newPassword;
   await persist();
+  await flushSave();
 }
 
 export async function disableEncryption(): Promise<void> {
+  sessionKey = null;
   sessionPassword = null;
   await persist();
+  await flushSave();
 }
 
 export async function checkFileEncrypted(path: string): Promise<boolean> {
@@ -400,18 +632,25 @@ export async function checkFileEncrypted(path: string): Promise<boolean> {
   }
 }
 
-export async function createNewFile(path: string): Promise<void> {
-  data = buildSeedData();
+async function startFreshFile(path: string, fresh: AppData): Promise<void> {
+  if (filePath) await flushSave();
+  resetForNewFile();
+  sessionKey = null;
+  sessionPassword = null;
+  data = fresh;
   filePath = path;
+  lastKnownMtime = null;
   await persist();
+  await flushSave();
   await invoke('set_file_path', { path });
 }
 
+export async function createNewFile(path: string): Promise<void> {
+  await startFreshFile(path, buildSeedData());
+}
+
 export async function createDemoFile(path: string): Promise<void> {
-  data = buildDemoData();
-  filePath = path;
-  await persist();
-  await invoke('set_file_path', { path });
+  await startFreshFile(path, buildDemoData());
 }
 
 export async function fileExists(path: string): Promise<boolean> {
@@ -422,134 +661,158 @@ export function getFilePath(): string | null {
   return filePath;
 }
 
-/** Startup data cleanup — fixes known data integrity issues. */
-export async function startupCleanup(): Promise<number> {
-  let fixed = 0;
-  const txnMap = new Map(data.transactions.map((t) => [t.id, t]));
-  const seen = new Set<number>();
+export interface CleanupResult { id: string; changed: number }
 
-  for (const t of data.transactions) {
-    // 1. Clear stale links (pointing to deleted transactions)
-    if (t.linkedTransactionId && t.linkedTransactionId > 0) {
-      const linked = txnMap.get(t.linkedTransactionId);
-      if (!linked) {
+/** Run a one-time migration (gated by data.completedMigrations). */
+function migrate(results: CleanupResult[], id: string, fn: () => number): void {
+  if (!data.completedMigrations) data.completedMigrations = [];
+  if (data.completedMigrations.includes(id)) return;
+  const changed = fn();
+  data.completedMigrations.push(id);
+  results.push({ id, changed });
+}
+
+function readLocal(key: string): string | null {
+  try { return typeof localStorage !== 'undefined' ? localStorage.getItem(key) : null; } catch { return null; }
+}
+
+/** Startup data cleanup — idempotent fixes plus one-time migrations. Returns what changed. */
+export async function startupCleanup(): Promise<CleanupResult[]> {
+  const results: CleanupResult[] = [];
+  if (!data.completedMigrations) data.completedMigrations = [];
+  let colorized = 0;
+
+  // 1. (every launch, idempotent) Clear stale links pointing to deleted transactions
+  {
+    const txnMap = new Set(data.transactions.map((t) => t.id));
+    let n = 0;
+    for (const t of data.transactions) {
+      if (t.linkedTransactionId && t.linkedTransactionId > 0 && !txnMap.has(t.linkedTransactionId)) {
         t.linkedTransactionId = null;
-        fixed++;
-      } else if (!seen.has(t.id) && linked.linkedTransactionId === t.id
-          && t.amount > 0 && linked.amount > 0
-          && Math.abs(t.amount - linked.amount) < 0.02) {
-        // 2. Fix bidirectional refund links: negate the refund (higher id = later import)
-        seen.add(t.id);
-        seen.add(linked.id);
+        n++;
+      }
+    }
+    if (n > 0) results.push({ id: 'clearStaleLinks', changed: n });
+  }
+
+  // 2. One-time: bidirectional refund links — negate the refund (higher id = later import)
+  migrate(results, 'fixBidirectionalRefundSigns', () => {
+    const txnMap = new Map(data.transactions.map((t) => [t.id, t]));
+    const seen = new Set<number>();
+    let n = 0;
+    for (const t of data.transactions) {
+      if (!t.linkedTransactionId || t.linkedTransactionId <= 0) continue;
+      const linked = txnMap.get(t.linkedTransactionId);
+      if (linked && !seen.has(t.id) && linked.linkedTransactionId === t.id
+          && t.amount > 0 && linked.amount > 0 && Math.abs(t.amount - linked.amount) < 0.02) {
+        seen.add(t.id); seen.add(linked.id);
         const refund = t.id > linked.id ? t : linked;
         refund.amount = -Math.abs(refund.amount);
-        fixed++;
+        n++;
       }
     }
+    return n;
+  });
 
-    // 3. Fix PayPal transactions with wrong ignoreInBudget (payments marked as credits)
-    if (t.instrument === 'PayPal' && t.ignoreInBudget && t.amount > 0 && t.linkedTransactionId === null) {
-      t.ignoreInBudget = false;
-      fixed++;
+  // 3. One-time: PayPal transactions wrongly marked as credits
+  migrate(results, 'fixPaypalIgnoreFlag', () => {
+    let n = 0;
+    for (const t of data.transactions) {
+      if (t.instrument === 'PayPal' && isCredit(t) && t.amount > 0 && t.linkedTransactionId === null) {
+        t.ignoreInBudget = false; n++;
+      }
     }
+    return n;
+  });
 
-    // 4. Fix recurring transactions from negative-amount templates
-    if (t.source === 'recurring') {
+  // 4. One-time: recurring transactions from negative-amount templates
+  migrate(results, 'fixRecurringNegativeAmounts', () => {
+    let n = 0;
+    for (const t of data.transactions) {
+      if (t.source !== 'recurring') continue;
       const tmpl = data.recurringTemplates.find((r) => String(r.id) === t.sourceRef);
       if (tmpl && tmpl.amount < 0 && t.amount > 0) {
-        t.amount = -Math.abs(t.amount);
-        t.ignoreInBudget = false;
-        fixed++;
+        t.amount = -Math.abs(t.amount); t.ignoreInBudget = false; n++;
       }
     }
-  }
+    return n;
+  });
 
-  // 5. Migrate old Amazon transactions: extract order# from descriptor into sourceRef
-  for (const t of data.transactions) {
-    if (t.source === 'amazon_paste' && t.sourceRef === 'paste') {
-      const m = t.descriptor.match(/#([\d-]+)$/);
-      if (m) { t.sourceRef = m[1]; fixed++; }
+  // 5. (every launch, idempotent) Amazon: extract order# from descriptor into sourceRef
+  {
+    let n = 0;
+    for (const t of data.transactions) {
+      if (t.source === 'amazon_paste' && t.sourceRef === 'paste') {
+        const m = t.descriptor.match(/#([\d-]+)$/);
+        if (m) { t.sourceRef = m[1]; n++; }
+      }
     }
+    if (n > 0) results.push({ id: 'amazonSourceRef', changed: n });
   }
 
-  // 6. Migrate stale Amazon refund transactions (positive amount, ignoreInBudget, comment has 'Refund')
-  // These were created as separate records; they should instead zero out the original payment.
-  const staleRefundTxns = data.transactions.filter(
-    (t) => t.source === 'amazon_payment' && t.amount > 0 && t.ignoreInBudget &&
-      (t.comment ?? '').includes('Refund'),
-  );
-  const refundStaleIds = new Set<number>();
-  // Group by orderNum so we process all payment-method splits together
-  const refundsByOrder = new Map<string, typeof staleRefundTxns>();
-  for (const r of staleRefundTxns) {
-    const arr = refundsByOrder.get(r.sourceRef) ?? [];
-    arr.push(r);
-    refundsByOrder.set(r.sourceRef, arr);
-  }
-  for (const [orderNum, refunds] of refundsByOrder) {
-    // Find non-stale originals (same orderNum, not in the stale set)
-    const originals = data.transactions.filter(
-      (t) => t.source === 'amazon_payment' && t.sourceRef === orderNum &&
-        t.amount > 0 && !refunds.some((r) => r.id === t.id),
+  // 6. One-time: stale Amazon refund records zero out the original payment
+  migrate(results, 'migrateStaleAmazonRefunds', () => {
+    let n = 0;
+    const staleRefundTxns = data.transactions.filter(
+      (t) => t.source === 'amazon_payment' && t.amount > 0 && isCredit(t) && (t.comment ?? '').includes('Refund'),
     );
-    if (originals.length > 0) {
-      for (const orig of originals) {
-        orig.amount = 0;
-        orig.ignoreInBudget = true;
-        fixed++;
-      }
+    const refundStaleIds = new Set<number>();
+    const refundsByOrder = new Map<string, typeof staleRefundTxns>();
+    for (const r of staleRefundTxns) {
+      const arr = refundsByOrder.get(r.sourceRef) ?? [];
+      arr.push(r);
+      refundsByOrder.set(r.sourceRef, arr);
     }
-    // Delete the stale refund records regardless (original was zeroed, or no original exists → net $0)
-    for (const r of refunds) refundStaleIds.add(r.id);
-    fixed += refunds.length;
-  }
-  if (refundStaleIds.size > 0) {
-    data.transactions = data.transactions.filter((t) => !refundStaleIds.has(t.id));
-    data.transactionSplits = data.transactionSplits.filter((s) => !refundStaleIds.has(s.transactionId));
-  }
-
-  // 7. Remove zero-amount transactions (parsing errors, but keep intentionally-zeroed Amazon orders)
-  const beforeZero = data.transactions.length;
-  data.transactions = data.transactions.filter(
-    (t) => t.amount !== 0 ||
-      ((t.source === 'amazon_payment' || t.source === 'amazon_order') && t.ignoreInBudget),
-  );
-  fixed += beforeZero - data.transactions.length;
-
-  // 7. Remove duplicate PayPal-linked re-imports (same date+amount+sourceRef, keep lowest id)
-  const sourceKeys = new Map<string, number>();
-  const dupIds = new Set<number>();
-  for (const t of [...data.transactions].sort((a, b) => a.id - b.id)) {
-    if (t.linkedTransactionId !== -1) continue; // only check PayPal-linked
-    const key = `${t.txnDate}|${t.sourceRef}|${t.amount}`;
-    if (sourceKeys.has(key)) {
-      dupIds.add(t.id); // higher id = duplicate
-    } else {
-      sourceKeys.set(key, t.id);
+    for (const [orderNum, refunds] of refundsByOrder) {
+      const originals = data.transactions.filter(
+        (t) => t.source === 'amazon_payment' && t.sourceRef === orderNum && t.amount > 0 && !refunds.some((r) => r.id === t.id),
+      );
+      for (const orig of originals) { orig.amount = 0; orig.ignoreInBudget = true; n++; }
+      for (const r of refunds) refundStaleIds.add(r.id);
+      n += refunds.length;
     }
-  }
-  if (dupIds.size > 0) {
-    const beforeDup = data.transactions.length;
+    if (refundStaleIds.size > 0) {
+      data.transactions = data.transactions.filter((t) => !refundStaleIds.has(t.id));
+      data.transactionSplits = data.transactionSplits.filter((s) => !refundStaleIds.has(s.transactionId));
+    }
+    return n;
+  });
+
+  // 7. One-time: remove zero-amount transactions (keeps intentionally-zeroed Amazon orders).
+  // Parsers now drop zero-amount rows at import so this never needs to run again.
+  migrate(results, 'removeZeroAmountTxns', () => {
+    const before = data.transactions.length;
+    data.transactions = data.transactions.filter(
+      (t) => t.amount !== 0 || ((t.source === 'amazon_payment' || t.source === 'amazon_order') && isCredit(t)),
+    );
+    return before - data.transactions.length;
+  });
+
+  // 7b. One-time: remove duplicate PayPal-linked re-imports (same date+amount+sourceRef, keep lowest id)
+  migrate(results, 'dedupePaypalReimports', () => {
+    const sourceKeys = new Map<string, number>();
+    const dupIds = new Set<number>();
+    for (const t of [...data.transactions].sort((a, b) => a.id - b.id)) {
+      if (!isPaypalLinked(t)) continue;
+      const key = `${t.txnDate}|${t.sourceRef}|${t.amount}`;
+      if (sourceKeys.has(key)) dupIds.add(t.id); else sourceKeys.set(key, t.id);
+    }
+    if (dupIds.size === 0) return 0;
+    const before = data.transactions.length;
     data.transactions = data.transactions.filter((t) => !dupIds.has(t.id));
     data.transactionSplits = data.transactionSplits.filter((s) => !dupIds.has(s.transactionId));
-    fixed += beforeDup - data.transactions.length;
-  }
+    return before - data.transactions.length;
+  });
 
-  // 8a. One-time: remove bank_csv duplicates (same-day, same-amount, same-account, matching descriptor prefix)
-  // These arise when two overlapping statements are imported — one with a year suffix in the instrument name,
-  // one without — causing the same transaction to appear twice with slightly different descriptors.
-  if (!data.completedMigrations) data.completedMigrations = [];
-  if (!data.completedMigrations.includes('deduplicateBankCsvTxns')) {
+  // 8a. One-time: remove bank_csv duplicates from overlapping statements
+  migrate(results, 'deduplicateBankCsvTxns', () => {
     const normInst2 = (s: string) => s.split(' - ')[0].trim().toLowerCase();
     const normDesc2 = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
     const splitsByTxnId = new Map<number, boolean>();
     for (const s of data.transactionSplits) splitsByTxnId.set(s.transactionId, true);
     const isCat = (t: Transaction) => t.categoryId != null || splitsByTxnId.has(t.id);
 
-    const bankTxns = [...data.transactions]
-      .filter((t) => t.source === 'bank_csv' && t.instrument)
-      .sort((a, b) => a.id - b.id);
-
+    const bankTxns = [...data.transactions].filter((t) => t.source === 'bank_csv' && t.instrument).sort((a, b) => a.id - b.id);
     const csvDupIds = new Set<number>();
     const seen2: { date: string; amount: number; instrument: string; desc: string; id: number }[] = [];
 
@@ -558,14 +821,12 @@ export async function startupCleanup(): Promise<number> {
       const date = t.originalTxnDate ?? t.txnDate;
       const inst = normInst2(t.instrument);
       const desc = normDesc2(t.descriptor);
-
       let foundDup = false;
       for (const s of seen2) {
         if (s.amount !== t.amount || s.instrument !== inst || s.date !== date) continue;
         const minLen = Math.min(desc.length, s.desc.length);
         if (minLen < 6) continue;
         if (desc.slice(0, 6) !== s.desc.slice(0, 6)) continue;
-        // Found a duplicate pair — keep the categorized one, or the one with longer descriptor, or lower id
         const tCat = isCat(t);
         const sCat = isCat(data.transactions.find((x) => x.id === s.id)!);
         if (!tCat && sCat) {
@@ -574,81 +835,69 @@ export async function startupCleanup(): Promise<number> {
           csvDupIds.add(s.id);
           seen2.splice(seen2.indexOf(s), 1);
           seen2.push({ date, amount: t.amount, instrument: inst, desc, id: t.id });
+        } else if (desc.length > s.desc.length) {
+          csvDupIds.add(s.id);
+          seen2.splice(seen2.indexOf(s), 1);
+          seen2.push({ date, amount: t.amount, instrument: inst, desc, id: t.id });
         } else {
-          // Same categorization — keep longer descriptor (more info), then lower id
-          if (desc.length > s.desc.length) {
-            csvDupIds.add(s.id);
-            seen2.splice(seen2.indexOf(s), 1);
-            seen2.push({ date, amount: t.amount, instrument: inst, desc, id: t.id });
-          } else {
-            csvDupIds.add(t.id);
-          }
+          csvDupIds.add(t.id);
         }
         foundDup = true;
         break;
       }
       if (!foundDup) seen2.push({ date, amount: t.amount, instrument: inst, desc, id: t.id });
     }
-
     if (csvDupIds.size > 0) {
-      fixed += csvDupIds.size;
       data.transactions = data.transactions.filter((t) => !csvDupIds.has(t.id));
       data.transactionSplits = data.transactionSplits.filter((s) => !csvDupIds.has(s.transactionId));
     }
-    data.completedMigrations.push('deduplicateBankCsvTxns');
-  }
+    return csvDupIds.size;
+  });
 
-  // 8b. One-time: strip " - identifier" suffixes from instrument names.
-  // Account identifiers are no longer appended to parser names; this cleans up existing data.
-  if (!data.completedMigrations.includes('stripInstrumentIdentifiers')) {
+  // 8b. One-time: strip " - identifier" suffixes from instrument names
+  migrate(results, 'stripInstrumentIdentifiers', () => {
+    let n = 0;
     for (const t of data.transactions) {
-      if (t.instrument && t.instrument.includes(' - ')) {
-        t.instrument = t.instrument.split(' - ')[0].trim();
-        fixed++;
+      if (t.instrument && t.instrument.includes(' - ')) { t.instrument = t.instrument.split(' - ')[0].trim(); n++; }
+    }
+    return n;
+  });
+
+  // 8. One-time: zero out amazon payments for cancelled/returned orders (addAmazonOrders handles new ones)
+  migrate(results, 'zeroCancelledAmazonOrders', () => {
+    let n = 0;
+    const cancelledOrderNums = new Set(
+      (data.amazonOrders ?? []).filter((o) => o.status === 'returned' || o.status === 'cancelled').map((o) => o.orderNum),
+    );
+    for (const t of data.transactions) {
+      if ((t.source === 'amazon_payment' || t.source === 'amazon_order') &&
+          t.sourceRef && cancelledOrderNums.has(t.sourceRef) && t.amount > 0) {
+        t.amount = 0; t.ignoreInBudget = true; n++;
       }
     }
-    data.completedMigrations.push('stripInstrumentIdentifiers');
-  }
+    return n;
+  });
 
-  // 8. Zero out amazon_payment transactions for cancelled/returned orders
-  const amazonOrders = data.amazonOrders ?? [];
-  const cancelledOrderNums = new Set(
-    amazonOrders
-      .filter((o) => o.status === 'returned' || o.status === 'cancelled')
-      .map((o) => o.orderNum),
-  );
-  for (const t of data.transactions) {
-    if ((t.source === 'amazon_payment' || t.source === 'amazon_order') &&
-        t.sourceRef && cancelledOrderNums.has(t.sourceRef) && t.amount > 0) {
-      t.amount = 0;
-      t.ignoreInBudget = true;
-      fixed++;
-    }
-  }
-
-
-
-  // 10a-pre. One-time: rename legacy instrument names to new canonical names
-  if (!data.completedMigrations.includes('normalizeInstrumentNames')) {
+  // 10a-pre. rename legacy instrument names
+  migrate(results, 'normalizeInstrumentNames', () => {
+    let n = 0;
     for (const t of data.transactions) {
-      if (t.instrument === 'Card') t.instrument = 'Scotiabank Credit Card CSV';
-      else if (t.instrument === 'Chequing') t.instrument = 'Scotiabank Chequing CSV';
+      if (t.instrument === 'Card') { t.instrument = 'Scotiabank Credit Card CSV'; n++; }
+      else if (t.instrument === 'Chequing') { t.instrument = 'Scotiabank Chequing CSV'; n++; }
     }
-    data.completedMigrations.push('normalizeInstrumentNames');
-    fixed++;
-  }
+    return n;
+  });
 
-  // 10a. One-time: delete all savings schedules
-  if (!data.completedMigrations) data.completedMigrations = [];
-  if (!data.completedMigrations.includes('deleteAllSavingsSchedules')) {
+  // 10a. delete all savings schedules
+  migrate(results, 'deleteAllSavingsSchedules', () => {
+    const n = data.savingsSchedules.length;
     data.savingsSchedules = [];
-    data.completedMigrations.push('deleteAllSavingsSchedules');
-    fixed++;
-  }
+    return n;
+  });
 
-
-  // 11. One-time: apply all existing split rules to matching transactions
-  if (!data.completedMigrations.includes('applySplitRules')) {
+  // 11. apply all existing split rules to matching transactions
+  migrate(results, 'applySplitRules', () => {
+    let n = 0;
     const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
     for (const rule of data.categoryRules) {
       if (!rule.splits || rule.splits.length < 2) continue;
@@ -663,41 +912,112 @@ export async function startupCleanup(): Promise<number> {
           const amt = s.percent != null ? txn.amount * s.percent / 100 : (s.amount ?? 0);
           data.transactionSplits.push({ id: nextId(), transactionId: txn.id, categoryId: s.categoryId, amount: amt });
         }
-        fixed++;
+        n++;
       }
     }
-    data.completedMigrations.push('applySplitRules');
-  }
+    return n;
+  });
 
-  // 12. Normalise bank CSV credit amounts to negative.
-  // New convention: expenses (debits) are positive, income (credits) are negative.
-  // This migration flips any bank_csv credit transaction that was stored with a positive
-  // amount under the old Math.abs()-everything convention.
-  if (!data.completedMigrations.includes('bankCsvCreditsNegative')) {
+  // 12. bank CSV credits stored negative
+  migrate(results, 'bankCsvCreditsNegative', () => {
+    let n = 0;
     for (const t of data.transactions) {
-      if (t.source === 'bank_csv' && t.ignoreInBudget && t.amount > 0) {
-        t.amount = -t.amount;
-        fixed++;
+      if (t.source === 'bank_csv' && isCredit(t) && t.amount > 0) { t.amount = -t.amount; n++; }
+    }
+    return n;
+  });
+
+  // 14. repair references to categories that no longer exist (old deletes left them dangling)
+  migrate(results, 'repairOrphanCategoryRefs', () => {
+    const valid = new Set(data.categories.map((c) => c.id));
+    let n = 0;
+    for (const t of data.transactions) {
+      if (t.categoryId != null && !valid.has(t.categoryId)) { t.categoryId = null; n++; }
+    }
+    const before = data.budgets.length;
+    data.budgets = data.budgets.filter((b) => valid.has(b.categoryId));
+    n += before - data.budgets.length;
+    const badSplitTxns = new Set(data.transactionSplits.filter((s) => !valid.has(s.categoryId)).map((s) => s.transactionId));
+    if (badSplitTxns.size > 0) {
+      data.transactionSplits = data.transactionSplits.filter((s) => !badSplitTxns.has(s.transactionId));
+      for (const t of data.transactions) {
+        if (badSplitTxns.has(t.id)) t.categoryId = null;
       }
+      n += badSplitTxns.size;
     }
-    data.completedMigrations.push('bankCsvCreditsNegative');
-  }
-
-  // 13. Backfill category colors for categories that don't have one yet
-  let colorized = 0;
-  for (let i = 0; i < data.categories.length; i++) {
-    if (!data.categories[i].color) {
-      data.categories[i].color = CATEGORY_PALETTE[i % CATEGORY_PALETTE.length];
-      colorized++;
+    const rulesBefore = data.categoryRules.length;
+    data.categoryRules = data.categoryRules.filter(
+      (r) => r.markTransfer || (valid.has(r.categoryId) && (r.splits ?? []).every((s) => valid.has(s.categoryId))),
+    );
+    n += rulesBefore - data.categoryRules.length;
+    for (const rt of data.recurringTemplates) {
+      if (rt.categoryId != null && !valid.has(rt.categoryId)) { rt.categoryId = null; n++; }
     }
-  }
+    if (data.mortgage) {
+      if (data.mortgage.paymentCategoryId != null && !valid.has(data.mortgage.paymentCategoryId)) { delete data.mortgage.paymentCategoryId; n++; }
+      if (data.mortgage.prepaymentCategoryId != null && !valid.has(data.mortgage.prepaymentCategoryId)) { delete data.mortgage.prepaymentCategoryId; n++; }
+    }
+    return n;
+  });
 
-  if (fixed > 0 || colorized > 0) await persist();
-  return fixed;
+  // 15. recurring templates only generate from their start month (no backfill from the earliest txn)
+  migrate(results, 'recurringStartMonth', () => {
+    let n = 0;
+    for (const tmpl of data.recurringTemplates) {
+      if (tmpl.startMonth) continue;
+      let earliest: string | null = null;
+      for (const t of data.transactions) {
+        if (t.source === 'recurring' && t.sourceRef === String(tmpl.id)) {
+          const m = t.txnDate.slice(0, 7);
+          if (earliest === null || m < earliest) earliest = m;
+        }
+      }
+      tmpl.startMonth = earliest ?? currentMonthStr();
+      n++;
+    }
+    return n;
+  });
+
+  // 16. feature flags / backup settings used to live in localStorage; they belong to the file
+  migrate(results, 'moveLocalSettingsIntoFile', () => {
+    const enabledRaw = readLocal('budget-app-backup-enabled');
+    const countRaw = readLocal('budget-app-backup-count');
+    const count = parseInt(countRaw ?? '', 10);
+    data.backupSettings = {
+      enabled: enabledRaw === 'false' ? false : true, // a missing value used to display as ON
+      maxCount: Number.isFinite(count) && count > 0 ? count : 5,
+    };
+    const dir = readLocal('budget-app-backup-dir');
+    if (dir && filePath) {
+      try { localStorage.setItem(`kestl-backup-dir:${filePath}`, dir); } catch { /* ignore */ }
+    }
+    const ds: DisplaySettings = { ...getDisplaySettings() };
+    const exp = readLocal('budget-app-experimental');
+    const mort = readLocal('budget-app-show-mortgage-tab');
+    const ai = readLocal('budget-app-txn-ai-lookup');
+    if (exp !== null) ds.experimentalEnabled = exp === 'true';
+    if (mort !== null) ds.showMortgageTab = mort === 'true';
+    if (ai !== null) ds.txnAiLookupEnabled = ai === 'true';
+    data.displaySettings = ds;
+    return 1;
+  });
+
+  // 13. (every launch) backfill category colors for categories that don't have one yet
+  for (const c of data.categories) {
+    if (!c.color) { c.color = pickDistinctColor(data.categories); colorized++; }
+  }
+  if (colorized > 0) results.push({ id: 'backfillCategoryColors', changed: colorized });
+
+  if (results.length > 0) {
+    console.info('[startupCleanup]', results);
+    await withoutUndo(persist);
+  }
+  return results;
 }
 
 // --- Categories ---
 export async function addCategory(name: string): Promise<number> {
+  pushUndoSnapshot('Add category');
   const id = nextId();
   const color = pickDistinctColor(data.categories);
   data.categories.push({ id, name, color });
@@ -705,26 +1025,77 @@ export async function addCategory(name: string): Promise<number> {
   return id;
 }
 
+export interface CategoryUsage {
+  transactions: number;
+  splits: number;
+  budgets: number;
+  rules: number;
+  recurring: number;
+  experimental: number;
+  mortgage: number;
+  total: number;
+}
+
+export function getCategoryUsage(id: number): CategoryUsage {
+  const transactions = data.transactions.filter((t) => t.categoryId === id).length;
+  const splits = data.transactionSplits.filter((s) => s.categoryId === id).length;
+  const budgets = data.budgets.filter((b) => b.categoryId === id).length;
+  const rules = data.categoryRules.filter((r) => r.categoryId === id || (r.splits ?? []).some((x) => x.categoryId === id)).length;
+  const recurring = data.recurringTemplates.filter((r) => r.categoryId === id).length;
+  const experimental = (data.experimentalBudgets ?? []).reduce(
+    (n, b) => n + b.items.filter((i) => i.categoryId === id).length, 0);
+  const mortgage = data.mortgage && (data.mortgage.paymentCategoryId === id || data.mortgage.prepaymentCategoryId === id) ? 1 : 0;
+  return {
+    transactions, splits, budgets, rules, recurring, experimental, mortgage,
+    total: transactions + splits + budgets + rules + recurring + experimental + mortgage,
+  };
+}
+
+/** Categories that may be chosen for new assignments (archived ones are hidden). */
+export function getSelectableCategories(d: AppData = data): Category[] {
+  return d.categories.filter((c) => !c.archived);
+}
+
+/** Only categories with no references can be deleted; otherwise archive or merge them. */
 export async function deleteCategory(id: number): Promise<void> {
-  pushUndoSnapshot();
+  if (getCategoryUsage(id).total > 0) throw new Error('Category is in use — archive or merge it instead');
+  pushUndoSnapshot('Delete category');
   data.categories = data.categories.filter((c) => c.id !== id);
-  data.categoryRules = data.categoryRules.filter((r) => r.categoryId !== id);
   await persist();
 }
 
+export async function setCategoryRollover(id: number, on: boolean): Promise<void> {
+  pushUndoSnapshot(on ? 'Turn on rollover' : 'Turn off rollover');
+  const cat = data.categories.find((c) => c.id === id);
+  if (!cat) return;
+  cat.rollover = on || undefined;
+  // Start from the current month so turning it on doesn't pull in years of history.
+  cat.rolloverStartMonth = on ? currentMonthStr() : undefined;
+  await persist();
+}
+
+export async function setCategoryArchived(id: number, archived: boolean): Promise<void> {
+  pushUndoSnapshot(archived ? 'Archive category' : 'Unarchive category');
+  const cat = data.categories.find((c) => c.id === id);
+  if (cat) { cat.archived = archived || undefined; await persist(); }
+}
+
 /**
- * Merge one or more source categories into a target category.
- * All transactions, splits, and rule references pointing to a source are
- * updated to point to the target instead. Source categories, their budget
- * entries, and any rules that solely belonged to them are then deleted.
+ * Merge one or more source categories into a target category. Transactions, splits, rules,
+ * budgets (amounts are added), recurring templates, sandbox budgets, mortgage links, AI feedback
+ * and savings-bucket links are all re-pointed. Source categories are then deleted.
  */
 export async function mergeCategories(sourceIds: number[], targetId: number): Promise<void> {
-  pushUndoSnapshot();
-  const sourceSet = new Set(sourceIds);
+  pushUndoSnapshot('Merge categories');
+  const sources = sourceIds.filter((id) => id !== targetId);
+  const sourceSet = new Set(sources);
+  const target = data.categories.find((c) => c.id === targetId);
 
   const affectedTransactionIds: number[] = [];
   const affectedSplitIds: number[] = [];
   const affectedRuleIds: number[] = [];
+  const affectedBudgetIds: number[] = [];
+  const affectedRecurringIds: number[] = [];
 
   for (const t of data.transactions) {
     if (t.categoryId != null && sourceSet.has(t.categoryId)) {
@@ -732,23 +1103,66 @@ export async function mergeCategories(sourceIds: number[], targetId: number): Pr
       t.categoryId = targetId;
     }
   }
-
   for (const s of data.transactionSplits) {
-    if (sourceSet.has(s.categoryId)) {
-      affectedSplitIds.push(s.id);
-      s.categoryId = targetId;
-    }
+    if (sourceSet.has(s.categoryId)) { affectedSplitIds.push(s.id); s.categoryId = targetId; }
   }
-
   for (const r of data.categoryRules) {
     let ruleAffected = false;
     if (sourceSet.has(r.categoryId)) { r.categoryId = targetId; ruleAffected = true; }
     if (r.splits) {
-      for (const s of r.splits) {
-        if (sourceSet.has(s.categoryId)) { s.categoryId = targetId; ruleAffected = true; }
+      for (const sp of r.splits) {
+        if (sourceSet.has(sp.categoryId)) { sp.categoryId = targetId; ruleAffected = true; }
       }
     }
     if (ruleAffected) affectedRuleIds.push(r.id);
+  }
+
+  // Budgets: per month, add source amounts into the target budget (never drop amounts).
+  const months = new Set(data.budgets.filter((b) => sourceSet.has(b.categoryId)).map((b) => b.month));
+  for (const month of months) {
+    const srcBudgets = data.budgets.filter((b) => b.month === month && sourceSet.has(b.categoryId));
+    let tgt = data.budgets.find((b) => b.month === month && b.categoryId === targetId);
+    for (const sb of srcBudgets) {
+      affectedBudgetIds.push(sb.id);
+      if (tgt) {
+        tgt.targetAmount = Math.round((tgt.targetAmount + sb.targetAmount) * 100) / 100;
+        data.budgets = data.budgets.filter((b) => b.id !== sb.id);
+      } else {
+        sb.categoryId = targetId;
+        tgt = sb;
+      }
+    }
+  }
+
+  for (const rt of data.recurringTemplates) {
+    if (rt.categoryId != null && sourceSet.has(rt.categoryId)) { rt.categoryId = targetId; affectedRecurringIds.push(rt.id); }
+  }
+
+  const targetName = target?.name ?? '';
+  for (const eb of data.experimentalBudgets ?? []) {
+    const merged = new Map<number, ExperimentalBudgetItem>();
+    for (const item of eb.items) {
+      if (sourceSet.has(item.categoryId)) { item.categoryId = targetId; item.categoryName = targetName || item.categoryName; }
+      const prev = merged.get(item.categoryId);
+      if (prev) prev.targetAmount = Math.round((prev.targetAmount + item.targetAmount) * 100) / 100;
+      else merged.set(item.categoryId, item);
+    }
+    eb.items = [...merged.values()];
+  }
+
+  if (data.mortgage) {
+    if (data.mortgage.paymentCategoryId != null && sourceSet.has(data.mortgage.paymentCategoryId)) data.mortgage.paymentCategoryId = targetId;
+    if (data.mortgage.prepaymentCategoryId != null && sourceSet.has(data.mortgage.prepaymentCategoryId)) data.mortgage.prepaymentCategoryId = targetId;
+  }
+
+  for (const f of data.aiCategoryFeedback ?? []) {
+    if (sourceSet.has(f.suggestedCategoryId)) f.suggestedCategoryId = targetId;
+    if (f.acceptedCategoryId != null && sourceSet.has(f.acceptedCategoryId)) f.acceptedCategoryId = targetId;
+  }
+
+  if (target && target.savingsBucketId == null) {
+    const inherit = data.categories.find((c) => sourceSet.has(c.id) && c.savingsBucketId != null);
+    if (inherit) target.savingsBucketId = inherit.savingsBucketId;
   }
 
   if (!data.mergeLogs) data.mergeLogs = [];
@@ -756,10 +1170,12 @@ export async function mergeCategories(sourceIds: number[], targetId: number): Pr
     id: nextId(),
     timestamp: new Date().toISOString(),
     targetCategoryId: targetId,
-    sourceCategoryIds: sourceIds,
+    sourceCategoryIds: sources,
     affectedTransactionIds,
     affectedSplitIds,
     affectedRuleIds,
+    affectedBudgetIds,
+    affectedRecurringIds,
   });
 
   data.categories = data.categories.filter((c) => !sourceSet.has(c.id));
@@ -769,6 +1185,7 @@ export async function mergeCategories(sourceIds: number[], targetId: number): Pr
 
 // --- Category Rules ---
 export async function addCategoryRule(rule: Omit<CategoryRule, 'id'>): Promise<number> {
+  pushUndoSnapshot('Add category rule');
   const id = nextId();
   data.categoryRules.push({ id, ...rule });
   await persist();
@@ -776,6 +1193,7 @@ export async function addCategoryRule(rule: Omit<CategoryRule, 'id'>): Promise<n
 }
 
 export async function updateCategoryRule(id: number, updates: Partial<Omit<CategoryRule, 'id'>>): Promise<void> {
+  pushUndoSnapshot('Update category rule');
   const idx = data.categoryRules.findIndex((r) => r.id === id);
   if (idx === -1) return;
   data.categoryRules = data.categoryRules.map((r) => r.id === id ? { ...r, ...updates } : r);
@@ -783,24 +1201,27 @@ export async function updateCategoryRule(id: number, updates: Partial<Omit<Categ
 }
 
 export async function deleteCategoryRule(id: number): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Delete category rule');
   data.categoryRules = data.categoryRules.filter((r) => r.id !== id);
   await persist();
 }
 
 export async function reorderCategoryRules(orderedIds: number[]): Promise<void> {
+  pushUndoSnapshot('Reorder category rules');
   const ruleMap = new Map(data.categoryRules.map((r) => [r.id, r]));
   data.categoryRules = orderedIds.map((id) => ruleMap.get(id)!).filter(Boolean);
   await persist();
 }
 
 export async function setSavingsLoanAmount(amount: number): Promise<void> {
+  pushUndoSnapshot('Set savings loan amount');
   data.savingsLoanAmount = amount;
   await persist();
 }
 
 // --- Budget Groups ---
 export async function addBudgetGroup(name: string): Promise<number> {
+  pushUndoSnapshot('Add budget group');
   const maxOrder = data.budgetGroups.reduce((m, g) => Math.max(m, g.sortOrder), -1);
   const id = nextId();
   data.budgetGroups.push({ id, name, sortOrder: maxOrder + 1 });
@@ -809,13 +1230,14 @@ export async function addBudgetGroup(name: string): Promise<number> {
 }
 
 export async function updateBudgetGroup(id: number, updates: Partial<BudgetGroup>): Promise<void> {
+  pushUndoSnapshot('Update budget group');
   const g = data.budgetGroups.find((x) => x.id === id);
   if (g) Object.assign(g, updates);
   await persist();
 }
 
 export async function deleteBudgetGroup(id: number): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Delete budget group');
   data.budgetGroups = data.budgetGroups.filter((g) => g.id !== id);
   for (const b of data.budgets) {
     if (b.groupId === id) b.groupId = null;
@@ -841,7 +1263,7 @@ export async function upsertBudget(month: string, categoryId: number, targetAmou
 }
 
 export async function reorderBudgetsInGroup(month: string, groupId: number | null, categoryIdsInOrder: number[]): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Reorder budgets in group');
   for (let i = 0; i < categoryIdsInOrder.length; i++) {
     const b = data.budgets.find((x) => x.month === month && x.categoryId === categoryIdsInOrder[i]);
     if (b) {
@@ -853,18 +1275,19 @@ export async function reorderBudgetsInGroup(month: string, groupId: number | nul
 }
 
 export async function updateBudgetNote(month: string, categoryId: number, note: string): Promise<void> {
+  pushUndoSnapshot('Update budget note');
   const b = data.budgets.find((x) => x.month === month && x.categoryId === categoryId);
   if (b) { b.note = note || undefined; await persist(); }
 }
 
 export async function deleteBudget(month: string, categoryId: number): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Delete budget');
   data.budgets = data.budgets.filter((b) => !(b.month === month && b.categoryId === categoryId));
   await persist();
 }
 
 export async function copyBudgetToMonths(sourceMonth: string, targetMonths: string[]): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Copy budget to months');
   const source = data.budgets.filter((b) => b.month === sourceMonth);
   for (const target of targetMonths) {
     // Remove all existing budget entries for the target month
@@ -884,8 +1307,21 @@ export async function copyBudgetToMonths(sourceMonth: string, targetMonths: stri
   await persist();
 }
 
+/** Remember deleted recurring occurrences so they are not regenerated. */
+function tombstoneRecurring(txns: Transaction[]) {
+  for (const t of txns) {
+    if (t.source !== 'recurring') continue;
+    const tmpl = data.recurringTemplates.find((r) => String(r.id) === t.sourceRef);
+    if (!tmpl) continue;
+    const m = t.txnDate.slice(0, 7);
+    const skipped = tmpl.skippedMonths ?? [];
+    if (!skipped.includes(m)) tmpl.skippedMonths = [...skipped, m].sort();
+  }
+}
+
 // --- Transactions ---
 export async function addTransaction(txn: Omit<Transaction, 'id'>): Promise<number> {
+  pushUndoSnapshot('Add transaction');
   const id = nextId();
   data.transactions.push({ id, ...txn });
   await persist();
@@ -893,12 +1329,14 @@ export async function addTransaction(txn: Omit<Transaction, 'id'>): Promise<numb
 }
 
 export async function updateTransaction(id: number, updates: Partial<Transaction>): Promise<void> {
+  pushUndoSnapshot('Update transaction');
   const txn = data.transactions.find((t) => t.id === id);
   if (txn) Object.assign(txn, updates);
   await persist();
 }
 
 export async function bulkAddTransactions(txns: Omit<Transaction, 'id'>[]): Promise<number[]> {
+  pushUndoSnapshot('Bulk add transactions');
   const ids: number[] = [];
   for (const t of txns) {
     const id = nextId();
@@ -910,8 +1348,9 @@ export async function bulkAddTransactions(txns: Omit<Transaction, 'id'>[]): Prom
 }
 
 export async function deleteTransactions(ids: number[]): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Delete transactions');
   const idSet = new Set(ids);
+  tombstoneRecurring(data.transactions.filter((t) => idSet.has(t.id)));
   data.transactions = data.transactions.filter((t) => !idSet.has(t.id));
   data.transactionSplits = data.transactionSplits.filter((s) => !idSet.has(s.transactionId));
   await persist();
@@ -922,7 +1361,7 @@ export async function deleteTransactions(ids: number[]): Promise<void> {
  *  instead of deleting them, and deletes any remaining pure PayPal-instrument transactions.
  *  Does not affect category rules. */
 export async function purgeTransactionsByMonth(month: string, instrument?: string): Promise<number> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Purge transactions by month');
   const prefix = `${month}-`;
   let affected = 0;
 
@@ -930,12 +1369,13 @@ export async function purgeTransactionsByMonth(month: string, instrument?: strin
     const inMonth = data.transactions.filter((t) => t.txnDate.startsWith(prefix));
 
     for (const t of inMonth) {
-      if (t.linkedTransactionId === -1) {
+      if (isPaypalLinked(t)) {
         // Clear PayPal-linked state; descriptor already contains the enriched PayPal info
         t.linkedTransactionId = null;
         t.categoryId = null;
         affected++;
       } else if (t.instrument === 'PayPal') {
+        tombstoneRecurring([t]);
         data.transactions = data.transactions.filter((x) => x.id !== t.id);
         data.transactionSplits = data.transactionSplits.filter((s) => s.transactionId !== t.id);
         affected++;
@@ -946,6 +1386,7 @@ export async function purgeTransactionsByMonth(month: string, instrument?: strin
       .filter((t) => t.txnDate.startsWith(prefix) && (!instrument || t.instrument === instrument))
       .map((t) => t.id);
     const ids = new Set(toDelete);
+    tombstoneRecurring(data.transactions.filter((t) => ids.has(t.id)));
     data.transactions = data.transactions.filter((t) => !ids.has(t.id));
     data.transactionSplits = data.transactionSplits.filter((s) => !ids.has(s.transactionId));
     affected = toDelete.length;
@@ -957,11 +1398,12 @@ export async function purgeTransactionsByMonth(month: string, instrument?: strin
 
 /** Permanently delete all transactions (and their splits) for a given instrument, across all months. */
 export async function purgeTransactionsByInstrument(instrument: string): Promise<number> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Purge transactions by instrument');
   const toDelete = data.transactions
     .filter((t) => t.instrument === instrument)
     .map((t) => t.id);
   const ids = new Set(toDelete);
+  tombstoneRecurring(data.transactions.filter((t) => ids.has(t.id)));
   data.transactions = data.transactions.filter((t) => !ids.has(t.id));
   data.transactionSplits = data.transactionSplits.filter((s) => !ids.has(s.transactionId));
   await persist();
@@ -970,6 +1412,7 @@ export async function purgeTransactionsByInstrument(instrument: string): Promise
 
 // --- Transaction Splits ---
 export async function setSplits(transactionId: number, splits: Omit<TransactionSplit, 'id' | 'transactionId'>[]): Promise<void> {
+  pushUndoSnapshot('Set splits');
   data.transactionSplits = data.transactionSplits.filter((s) => s.transactionId !== transactionId);
   for (const s of splits) {
     data.transactionSplits.push({ id: nextId(), transactionId, ...s });
@@ -977,13 +1420,29 @@ export async function setSplits(transactionId: number, splits: Omit<TransactionS
   await persist();
 }
 
+/** Replace the splits of many transactions with ONE save. */
+export async function setSplitsBulk(
+  entries: { transactionId: number; splits: Omit<TransactionSplit, 'id' | 'transactionId'>[] }[],
+): Promise<void> {
+  if (entries.length === 0) return;
+  pushUndoSnapshot('Set splits');
+  const ids = new Set(entries.map((e) => e.transactionId));
+  data.transactionSplits = data.transactionSplits.filter((s) => !ids.has(s.transactionId));
+  for (const e of entries) {
+    for (const sp of e.splits) data.transactionSplits.push({ id: nextId(), transactionId: e.transactionId, ...sp });
+  }
+  await persist();
+}
+
 export async function clearSplits(transactionId: number): Promise<void> {
+  pushUndoSnapshot('Clear splits');
   data.transactionSplits = data.transactionSplits.filter((s) => s.transactionId !== transactionId);
   await persist();
 }
 
 // --- Savings ---
 export async function addSavingsBucket(name: string): Promise<number> {
+  pushUndoSnapshot('Add savings bucket');
   const id = nextId();
   data.savingsBuckets.push({ id, name });
   await persist();
@@ -991,26 +1450,36 @@ export async function addSavingsBucket(name: string): Promise<number> {
 }
 
 export async function deleteSavingsBucket(id: number): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Delete savings bucket');
   data.savingsBuckets = data.savingsBuckets.filter((b) => b.id !== id);
+  for (const c of data.categories) if (c.savingsBucketId === id) c.savingsBucketId = undefined;
   data.savingsEntries = data.savingsEntries.filter((e) => e.bucketId !== id);
   data.savingsSchedules = data.savingsSchedules.filter((s) => s.bucketId !== id);
   await persist();
 }
 
 export async function addSavingsEntry(entry: Omit<SavingsEntry, 'id'>): Promise<void> {
+  pushUndoSnapshot('Add savings entry');
   data.savingsEntries.push({ id: nextId(), ...entry });
   await persist();
 }
 
+export async function bulkAddSavingsEntries(entries: Omit<SavingsEntry, 'id'>[]): Promise<void> {
+  if (entries.length === 0) return;
+  pushUndoSnapshot('Add savings entries');
+  for (const e of entries) data.savingsEntries.push({ id: nextId(), ...e });
+  await persist();
+}
+
 export async function deleteSavingsEntry(id: number): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Delete savings entry');
   data.savingsEntries = data.savingsEntries.filter((e) => e.id !== id);
   await persist();
 }
 
 /** Remove all auto-generated schedule entries. Use this when switching to transaction-based contributions. */
 export async function clearAutoScheduleEntries(): Promise<number> {
+  pushUndoSnapshot('Clear auto schedule entries');
   const before = data.savingsEntries.length;
   data.savingsEntries = data.savingsEntries.filter((e) => e.source !== 'auto_schedule');
   const removed = before - data.savingsEntries.length;
@@ -1019,23 +1488,26 @@ export async function clearAutoScheduleEntries(): Promise<number> {
 }
 
 export async function addSavingsSchedule(sched: Omit<SavingsSchedule, 'id'>): Promise<void> {
+  pushUndoSnapshot('Add savings schedule');
   data.savingsSchedules.push({ id: nextId(), ...sched });
   await persist();
 }
 
 export async function updateSavingsSchedule(id: number, updates: Partial<SavingsSchedule>): Promise<void> {
+  pushUndoSnapshot('Update savings schedule');
   const s = data.savingsSchedules.find((x) => x.id === id);
   if (s) Object.assign(s, updates);
   await persist();
 }
 
 export async function deleteSavingsSchedule(id: number): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Delete savings schedule');
   data.savingsSchedules = data.savingsSchedules.filter((s) => s.id !== id);
   await persist();
 }
 
 export async function deleteAllSavingsSchedules(): Promise<number> {
+  pushUndoSnapshot('Delete all savings schedules');
   const count = data.savingsSchedules.length;
   data.savingsSchedules = [];
   if (count > 0) await persist();
@@ -1044,21 +1516,39 @@ export async function deleteAllSavingsSchedules(): Promise<number> {
 
 // --- Recurring Templates ---
 export async function addRecurringTemplate(t: Omit<RecurringTemplate, 'id'>): Promise<number> {
+  pushUndoSnapshot('Add recurring template');
   const id = nextId();
-  data.recurringTemplates.push({ id, ...t });
+  data.recurringTemplates.push({ id, ...t, startMonth: t.startMonth ?? currentMonthStr() });
   await persist();
   return id;
 }
 
 export async function deleteRecurringTemplate(id: number): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Delete recurring template');
   data.recurringTemplates = data.recurringTemplates.filter((t) => t.id !== id);
   await persist();
 }
 
 export async function updateRecurringTemplate(id: number, updates: Partial<RecurringTemplate>): Promise<void> {
+  pushUndoSnapshot('Update recurring template');
   const t = data.recurringTemplates.find((x) => x.id === id);
-  if (t) Object.assign(t, updates);
+  if (t) {
+    const wasActive = t.active;
+    Object.assign(t, updates);
+    if (updates.active !== undefined && updates.active !== wasActive) {
+      const cur = currentMonthStr();
+      if (!updates.active) {
+        t.pausedAt = cur;
+      } else if (t.pausedAt) {
+        // Resuming: months strictly after pausedAt up to the month BEFORE the current one are skipped.
+        const skipped = new Set(t.skippedMonths ?? []);
+        const last = prevMonth(cur);
+        for (const m of monthsBetween(nextMonthStr(t.pausedAt), last)) skipped.add(m);
+        t.skippedMonths = [...skipped].sort();
+        t.pausedAt = undefined;
+      }
+    }
+  }
   await persist();
 }
 
@@ -1069,6 +1559,7 @@ export function getAmazonOrder(orderNum: string): AmazonOrder | undefined {
 }
 
 export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: number; linked: number }> {
+  pushUndoSnapshot('Add amazon orders');
   if (!data.amazonOrders) data.amazonOrders = [];
   const existingMap = new Map(data.amazonOrders.map((o) => [o.orderNum, o]));
 
@@ -1128,98 +1619,10 @@ export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: n
 
 // --- Split Templates ---
 export async function addSplitTemplate(template: Omit<SplitTemplate, 'id'>): Promise<void> {
+  pushUndoSnapshot('Add split template');
   const id = nextId();
   data.splitTemplates = data.splitTemplates ?? [];
   data.splitTemplates.push({ id, ...template });
-  await persist();
-}
-
-// --- Add default budget for a specific month (for empty months) ---
-export async function addDefaultBudgetForMonth(month: string): Promise<void> {
-  const catByName = new Map(data.categories.map((c) => [c.name, c.id]));
-  for (const { name, amount } of DEFAULT_BUDGET_ITEMS) {
-    const catId = catByName.get(name);
-    if (catId != null) {
-      const existing = data.budgets.find((b) => b.month === month && b.categoryId === catId);
-      if (!existing) {
-        data.budgets.push({ id: nextId(), month, categoryId: catId, targetAmount: amount });
-      }
-    }
-  }
-  await persist();
-}
-
-// --- Load default budget (for existing files) ---
-export async function loadDefaultBudget(): Promise<void> {
-  const month = `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
-  const budgetMonths = [month, '2026-01', '2026-02', '2026-03'];
-  const existingNames = new Set(data.categories.map((c) => c.name.toLowerCase()));
-
-  for (const { name } of DEFAULT_BUDGET_ITEMS) {
-    if (!existingNames.has(name.toLowerCase())) {
-      const id = nextId();
-      data.categories.push({ id, name, isIncome: INCOME_CATEGORY_NAMES.has(name) });
-      existingNames.add(name.toLowerCase());
-    }
-  }
-
-  const catByName = new Map(data.categories.map((c) => [c.name, c.id]));
-  for (const m of budgetMonths) {
-    for (const { name, amount } of DEFAULT_BUDGET_ITEMS) {
-      const catId = catByName.get(name);
-      if (catId != null) {
-        const existing = data.budgets.find((b) => b.month === m && b.categoryId === catId);
-        if (existing) {
-          existing.targetAmount = amount;
-        } else {
-          data.budgets.push({ id: nextId(), month: m, categoryId: catId, targetAmount: amount });
-        }
-      }
-    }
-  }
-
-  if ((data.savingsBuckets?.length ?? 0) === 0) {
-    data.savingsBuckets = data.savingsBuckets ?? [];
-    data.savingsSchedules = data.savingsSchedules ?? [];
-    data.savingsEntries = data.savingsEntries ?? [];
-    const bucketIdByName = new Map<string, number>();
-    const today = new Date().toISOString().slice(0, 10);
-    for (const { bucket, amount } of DEFAULT_SAVINGS) {
-      const bucketId = nextId();
-      data.savingsBuckets.push({ id: bucketId, name: bucket });
-      bucketIdByName.set(bucket, bucketId);
-      data.savingsSchedules.push({
-        id: nextId(),
-        bucketId,
-        dayOfMonth: 1,
-        amount,
-        startMonth: month,
-        active: true,
-      });
-    }
-    for (const { bucket, amount } of DEFAULT_SAVINGS_BALANCES) {
-      const bucketId = bucketIdByName.get(bucket);
-      if (bucketId != null && amount !== 0) {
-        data.savingsEntries.push({
-          id: nextId(),
-          entryDate: today,
-          bucketId,
-          amount,
-          notes: 'Opening balance',
-          source: 'manual',
-          scheduleId: null,
-        });
-      }
-    }
-  }
-
-  if ((data.splitTemplates?.length ?? 0) === 0) {
-    data.splitTemplates = data.splitTemplates ?? [];
-    for (const t of DEFAULT_SPLIT_TEMPLATES) {
-      data.splitTemplates.push({ id: nextId(), name: t.name, items: t.items });
-    }
-  }
-
   await persist();
 }
 
@@ -1256,6 +1659,15 @@ export async function updateDisplaySettings(patch: Partial<DisplaySettings>): Pr
   await persist();
 }
 
+export function getBackupSettings(): BackupSettings {
+  return { enabled: true, maxCount: 5, ...data.backupSettings };
+}
+
+export async function updateBackupSettings(patch: Partial<BackupSettings>): Promise<void> {
+  data.backupSettings = { ...getBackupSettings(), ...patch };
+  await persist();
+}
+
 // --- AI Category Feedback ---
 export function getAICategoryFeedback(): AICategoryFeedback[] {
   return data.aiCategoryFeedback ?? [];
@@ -1287,6 +1699,7 @@ export function getCustomParsers(): CustomParser[] {
 }
 
 export async function saveCustomParser(parser: CustomParser): Promise<void> {
+  pushUndoSnapshot('Save custom parser');
   if (!data.customParsers) data.customParsers = [];
   const idx = data.customParsers.findIndex((p) => p.id === parser.id);
   if (idx >= 0) data.customParsers[idx] = parser;
@@ -1295,68 +1708,55 @@ export async function saveCustomParser(parser: CustomParser): Promise<void> {
 }
 
 export async function deleteCustomParser(id: string): Promise<void> {
+  pushUndoSnapshot('Delete custom parser');
   data.customParsers = (data.customParsers ?? []).filter((p) => p.id !== id);
   await persist();
 }
 
 /**
- * Robust date parser injected into the custom parser sandbox.
- * Handles M/D/YY, M/D/YYYY, YYYY-MM-DD, DD-Mon-YYYY, and ISO variants.
- * Returns YYYY-MM-DD or throws with a helpful message.
+ * Execute a custom parser in an isolated Web Worker (no Tauri IPC access). Terminated after 10 s
+ * so an infinite loop can't freeze the app. Rows are re-validated here in the main thread.
  */
-function sandboxParseDate(raw: string): string {
-  const s = (raw ?? '').trim();
-  if (!s) throw new Error(`Empty date value`);
-  // Already YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  // M/D/YY or M/D/YYYY
-  const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-  if (slash) {
-    const [, m, d, y] = slash;
-    const year = y.length === 2 ? `20${y}` : y;
-    return `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
-  }
-  // YYYY/MM/DD
-  const ymd = s.match(/^(\d{4})\/(\d{2})\/(\d{2})$/);
-  if (ymd) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
-  // DD-Mon-YYYY or DD Mon YYYY
-  const months: Record<string, string> = { jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12' };
-  const mon = s.match(/^(\d{1,2})[-\s]([A-Za-z]{3})[-\s](\d{4})$/);
-  if (mon) {
-    const mo = months[mon[2].toLowerCase()];
-    if (mo) return `${mon[3]}-${mo}-${mon[1].padStart(2, '0')}`;
-  }
-  // YYYYMMDD
-  if (/^\d{8}$/.test(s)) return `${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`;
-  throw new Error(`Unrecognised date format: "${s}"`);
-}
-
-/** Execute a custom parser code string against file content. */
 export function executeCustomParser(
   code: string,
   text: string,
   filename: string,
-): Omit<Transaction, 'id'>[] {
-  try {
-    // eslint-disable-next-line no-new-func
-    const fn = new Function('text', 'filename', 'parseDate', `
-      ${code}
-      return parseTransactions(text, filename);
-    `);
-    const result = fn(text, filename, sandboxParseDate);
-    if (!Array.isArray(result)) return [];
-    // Validate each row so bad dates/amounts surface with a helpful message
-    for (let i = 0; i < result.length; i++) {
-      const r = result[i] as Record<string, unknown>;
-      if (typeof r.txnDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(r.txnDate as string)) {
-        throw new Error(`Row ${i + 1}: txnDate "${r.txnDate}" is not YYYY-MM-DD. Check your date parsing logic.`);
-      }
+): Promise<Omit<Transaction, 'id'>[]> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./workers/parserWorker.ts', import.meta.url), { type: 'module' });
+    const finish = () => { clearTimeout(timer); worker.terminate(); };
+    const timer = setTimeout(() => {
+      finish();
+      reject(new Error('Custom parser timed out after 10 seconds (infinite loop?)'));
+    }, 10_000);
+    worker.onmessage = (e: MessageEvent<{ ok: boolean; rows?: unknown; error?: string }>) => {
+      finish();
+      if (!e.data.ok) { reject(new Error(e.data.error ?? 'Parser failed')); return; }
+      try { resolve(validateParsedRows(e.data.rows)); } catch (err) { reject(err); }
+    };
+    worker.onerror = (e) => {
+      finish();
+      reject(new Error(e.message || 'Custom parser crashed'));
+    };
+    worker.postMessage({ code, text, filename });
+  });
+}
+
+function validateParsedRows(rows: unknown): Omit<Transaction, 'id'>[] {
+  if (!Array.isArray(rows)) return [];
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] as Record<string, unknown>;
+    if (typeof r?.txnDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(r.txnDate)) {
+      throw new Error(`Row ${i + 1}: txnDate "${String(r?.txnDate)}" is not YYYY-MM-DD. Check your date parsing logic.`);
     }
-    return result as Omit<Transaction, 'id'>[];
-  } catch (e) {
-    console.error('[CustomParser] Error executing parser:', e);
-    throw e;
+    if (typeof r.amount !== 'number' || !Number.isFinite(r.amount)) {
+      throw new Error(`Row ${i + 1}: amount "${String(r.amount)}" is not a finite number.`);
+    }
+    if (typeof r.descriptor !== 'string') {
+      throw new Error(`Row ${i + 1}: descriptor must be a string.`);
+    }
   }
+  return rows as Omit<Transaction, 'id'>[];
 }
 
 // --- Experimental Budgets ---
@@ -1365,6 +1765,7 @@ export function getExperimentalBudgets(): ExperimentalBudget[] {
 }
 
 export async function saveExperimentalBudget(budget: Omit<ExperimentalBudget, 'id'> & { id?: number }): Promise<ExperimentalBudget> {
+  pushUndoSnapshot('Save experimental budget');
   if (!data.experimentalBudgets) data.experimentalBudgets = [];
   if (budget.id != null) {
     const idx = data.experimentalBudgets.findIndex((b) => b.id === budget.id);
@@ -1382,6 +1783,7 @@ export async function saveExperimentalBudget(budget: Omit<ExperimentalBudget, 'i
 }
 
 export async function deleteExperimentalBudget(id: number): Promise<void> {
+  pushUndoSnapshot('Delete experimental budget');
   if (!data.experimentalBudgets) return;
   data.experimentalBudgets = data.experimentalBudgets.filter((b) => b.id !== id);
   await persist();
@@ -1431,6 +1833,7 @@ export function getMortgageConfig(): MortgageConfig | null {
 }
 
 export async function setMortgageConfig(config: MortgageConfig | null): Promise<void> {
+  pushUndoSnapshot('Set mortgage config');
   if (config === null) {
     delete data.mortgage;
   } else {
@@ -1456,13 +1859,14 @@ export async function addMortgageLedgerEntry(
 }
 
 export async function deleteMortgageLedgerEntry(id: number): Promise<void> {
+  pushUndoSnapshot('Delete mortgage ledger entry');
   if (!data.mortgageLedger) return;
   data.mortgageLedger = data.mortgageLedger.filter((e) => e.id !== id);
   await persist();
 }
 
 export async function deleteMortgage(): Promise<void> {
-  pushUndoSnapshot();
+  pushUndoSnapshot('Delete mortgage');
   delete data.mortgage;
   delete data.mortgageLedger;
   await persist();

@@ -38,7 +38,7 @@ export function AIPanel({ onClose }: Props) {
 
   const months = [...new Set(appData.budgets.map((b) => b.month))].sort((a, b) => b.localeCompare(a));
   const categories = appData.categories
-    .filter((c) => !c.isIncome)
+    .filter((c) => !c.isIncome && !c.archived)
     .sort((a, b) => a.name.localeCompare(b.name));
 
   const monthOptions = months.map((m) => ({ value: m, label: formatMonth(m) }));

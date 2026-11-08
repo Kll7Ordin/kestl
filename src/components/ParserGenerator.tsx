@@ -10,6 +10,7 @@ import {
 } from '../db';
 import { generateParser, checkOllama } from '../logic/llm';
 import { formatAmount } from '../utils/format';
+import { isCredit } from '../logic/txnKind';
 
 type Step = 'create' | 'preview' | 'confirm' | 'wrong';
 
@@ -58,7 +59,7 @@ export function ParserGenerator({ onParsersChange, onImportFile }: Props) {
         setOllamaStarting(false);
         return;
       }
-      await invoke('start_ollama', { binaryPath });
+      await invoke('start_ollama');
       setOllamaModalStatus('Ollama started. Checking connection…');
       await new Promise((r) => setTimeout(r, 2000));
       const settings = getAISettings();
@@ -150,12 +151,12 @@ export function ParserGenerator({ onParsersChange, onImportFile }: Props) {
     setRealContent(text);
     setPreviewError('');
     try {
-      const txns = executeCustomParser(generatedCode, text, file.name);
+      const txns = await executeCustomParser(generatedCode, text, file.name);
       if (txns.length === 0) {
         // Test against original sample to distinguish "broken parser" vs "file mismatch"
         let sampleCount = -1;
         try {
-          sampleCount = executeCustomParser(generatedCode, sampleContent, sampleFilename).length;
+          sampleCount = (await executeCustomParser(generatedCode, sampleContent, sampleFilename)).length;
         } catch { /* ignore */ }
 
         if (sampleCount === 0) {
@@ -175,7 +176,7 @@ export function ParserGenerator({ onParsersChange, onImportFile }: Props) {
           const lines = text.split(/\r?\n/).filter((l) => l.trim());
           if (lines.length >= 2) {
             try {
-              executeCustomParser(generatedCode, lines.slice(0, 2).join('\n'), file.name);
+              await executeCustomParser(generatedCode, lines.slice(0, 2).join('\n'), file.name);
             } catch (diagErr) {
               hint = ` Hint: ${String(diagErr)}`;
             }
@@ -353,8 +354,8 @@ export function ParserGenerator({ onParsersChange, onImportFile }: Props) {
                     <td style={{ whiteSpace: 'nowrap', fontSize: '0.82rem' }}>{t.txnDate}</td>
                     <td style={{ fontSize: '0.82rem' }}>{t.descriptor}</td>
                     <td className="num" style={{ fontSize: '0.82rem' }}>${formatAmount(t.amount)}</td>
-                    <td style={{ fontSize: '0.82rem', color: t.ignoreInBudget ? '#16a34a' : 'var(--text-1)' }}>
-                      {t.ignoreInBudget ? 'credit' : 'debit'}
+                    <td style={{ fontSize: '0.82rem', color: isCredit(t) ? '#16a34a' : 'var(--text-1)' }}>
+                      {isCredit(t) ? 'credit' : 'debit'}
                     </td>
                   </tr>
                 ))}

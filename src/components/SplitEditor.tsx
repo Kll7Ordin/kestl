@@ -96,7 +96,7 @@ export function SplitEditor({ transaction, categories, onClose }: Props) {
             <div key={i} style={{ display: 'flex', gap: '0.4rem', marginBottom: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <div style={{ flex: '2 1 140px', minWidth: 0 }}>
                 <SearchableSelect
-                  options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                  options={categories.filter((c) => !c.archived).map((c) => ({ value: c.id, label: c.name }))}
                   value={l.categoryId}
                   onChange={(v) => updateLine(i, 'categoryId', v === '' ? '' : Number(v))}
                   placeholder="Category..."

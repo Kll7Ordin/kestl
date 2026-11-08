@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { AppData } from '../db';
 import { getBucketBalance } from '../logic/savings';
 import { INCOME_CATEGORY_NAMES } from '../seed';
+import { isCredit } from '../logic/txnKind';
 
 function sheetMonthLabel(month: string): string {
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -51,7 +52,7 @@ export async function createReadableArchive(appData: AppData): Promise<string> {
     // Spending map (credits are negative and reduce spent, matching BudgetView logic)
     const spending = new Map<number, number>();
     for (const t of transactions) {
-      if (t.txnDate.startsWith(month) && !t.ignoreInBudget && t.categoryId) {
+      if (t.txnDate.startsWith(month) && !isCredit(t) && t.categoryId) {
         spending.set(t.categoryId, (spending.get(t.categoryId) ?? 0) + t.amount);
       }
     }
@@ -98,7 +99,7 @@ export async function createReadableArchive(appData: AppData): Promise<string> {
         t.categoryId ? (catMap.get(t.categoryId)?.name ?? '?') : '',
         t.instrument,
         t.comment ?? '',
-        t.ignoreInBudget ? 'yes' : '',
+        isCredit(t) ? 'yes' : '',
       ]),
     ];
 
@@ -127,12 +128,12 @@ export async function createReadableArchive(appData: AppData): Promise<string> {
     for (const t of transactions) {
       if (!t.txnDate.startsWith(month) || !t.categoryId) continue;
       if (incomeCatIds.has(t.categoryId)) {
-        if (t.ignoreInBudget) income += t.amount;
+        if (isCredit(t)) income += t.amount;
       } else if (budgetedExpenseCatIds.has(t.categoryId)) {
         if (occasionalCatIds.has(t.categoryId)) {
-          if (!t.ignoreInBudget) savings += t.amount;
+          if (!isCredit(t)) savings += t.amount;
         } else {
-          if (!t.ignoreInBudget) actual += t.amount;
+          if (!isCredit(t)) actual += t.amount;
         }
       }
     }

@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { flushSync, createPortal } from 'react-dom';
-import { getData, subscribe, upsertBudget, deleteBudget, updateBudgetNote, addBudgetGroup, updateBudgetGroup, deleteBudgetGroup, reorderBudgetsInGroup, addCategory, updateCategoryNote, updateCategoryName, updateCategoryIsIncome, pushUndoSnapshot, getColorThresholds, copyBudgetToMonths, getDisplaySettings, updateDisplaySettings, type ColorThresholds, type Category, type TransactionSplit, type BudgetGroup, type ExperimentalBudget } from '../db';
+import { getData, subscribe, upsertBudget, deleteBudget, updateBudgetNote, addBudgetGroup, updateBudgetGroup, deleteBudgetGroup, reorderBudgetsInGroup, addCategory, updateCategoryNote, updateCategoryName, updateCategoryIsIncome, withUndo, getColorThresholds, copyBudgetToMonths, getDisplaySettings, updateDisplaySettings, type ColorThresholds, type Category, type BudgetGroup, type ExperimentalBudget } from '../db';
 import { ImportBudgetCard } from './ImportBudgetCard';
 import { SearchableSelect } from './SearchableSelect';
 import { formatAmount } from '../utils/format';
-import { INCOME_CATEGORY_NAMES } from '../seed';
+import { buildRows, type BudgetRow } from '../logic/budgetRows';
+import { projectCurrentMonth, type MonthProjection } from '../logic/forecast';
 
 function formatDiff(n: number): string {
   const r = Math.round(n);
@@ -25,133 +26,6 @@ function budgetDiffColor(diff: number, target: number, t: ColorThresholds): stri
 function currentMonth(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
-interface BudgetRow {
-  categoryId: number;
-  categoryName: string;
-  note?: string;
-  budgetNote?: string;
-  target: number;
-  spent: number;
-  ytd: number;
-  ytdTarget: number;
-  ytdDiff: number;
-  ytdAvgDiff: number;
-  relevantMonthCount: number;
-  isIncome?: boolean;
-  groupId?: number | null;
-  sortOrder?: number;
-}
-
-const _catMap = new Map<number, string>();
-
-function buildRows(month: string, categories: Category[], _budgetGroups: BudgetGroup[], ytdMode: 'ytd' | 'rolling12'): { rows: BudgetRow[]; priorMonthCount: number; allIncomeReceived: number } {
-  const d = getData();
-  const budgets = d.budgets.filter((b) => b.month === month);
-  _catMap.clear();
-  for (const c of categories) _catMap.set(c.id, c.name);
-
-  const [yearNum, monthNum] = month.split('-').map(Number);
-  const monthStart = `${month}-01`;
-  const monthEnd = `${month}-31`;
-
-  const priorMonths: string[] = [];
-  if (ytdMode === 'rolling12') {
-    for (let i = 12; i >= 1; i--) {
-      const pd = new Date(yearNum, monthNum - 1 - i, 1);
-      priorMonths.push(`${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`);
-    }
-  } else {
-    for (let m = 1; m < monthNum; m++) {
-      priorMonths.push(`${yearNum}-${String(m).padStart(2, '0')}`);
-    }
-  }
-
-  // Months that had at least one transaction globally (user was actively tracking)
-  const monthsWithTxns = new Set<string>();
-  for (const t of d.transactions) monthsWithTxns.add(t.txnDate.slice(0, 7));
-
-  const splitsByTxn = new Map<number, TransactionSplit[]>();
-  for (const s of d.transactionSplits) {
-    const arr = splitsByTxn.get(s.transactionId) ?? [];
-    arr.push(s);
-    splitsByTxn.set(s.transactionId, arr);
-  }
-
-  function accumulateRange(rangeStart: string, rangeEnd: string, spendMap: Map<number, number>, incomeMap: Map<number, number>) {
-    for (const t of d.transactions) {
-      const txnSplits = splitsByTxn.get(t.id);
-      if (txnSplits && txnSplits.length > 0) {
-        for (const s of txnSplits) {
-          const effectiveDate = s.txnDate ?? t.txnDate;
-          if (effectiveDate < rangeStart || effectiveDate > rangeEnd) continue;
-          const map = t.ignoreInBudget ? incomeMap : spendMap;
-          // Credits may be stored as negative amounts; income is always a positive quantity.
-          const contribution = t.ignoreInBudget ? Math.abs(s.amount) : s.amount;
-          map.set(s.categoryId, (map.get(s.categoryId) ?? 0) + contribution);
-        }
-      } else if (t.categoryId) {
-        if (t.txnDate < rangeStart || t.txnDate > rangeEnd) continue;
-        const map = t.ignoreInBudget ? incomeMap : spendMap;
-        const contribution = t.ignoreInBudget ? Math.abs(t.amount) : t.amount;
-        map.set(t.categoryId, (map.get(t.categoryId) ?? 0) + contribution);
-      }
-    }
-  }
-
-  const spendByCategory = new Map<number, number>();
-  const incomeByCategory = new Map<number, number>();
-  accumulateRange(monthStart, monthEnd, spendByCategory, incomeByCategory);
-
-  const ytdSpendMap = new Map<number, number>();
-  const ytdIncomeMap = new Map<number, number>();
-  for (const pm of priorMonths) {
-    accumulateRange(`${pm}-01`, `${pm}-31`, ytdSpendMap, ytdIncomeMap);
-  }
-
-  const rows = budgets.map((b) => {
-    const cat = categories.find((c) => c.id === b.categoryId);
-    const isIncome = cat?.isIncome === true || (cat != null && INCOME_CATEGORY_NAMES.has(cat.name));
-    const grossSpent = spendByCategory.get(b.categoryId) ?? 0;
-    const credits = incomeByCategory.get(b.categoryId) ?? 0;
-    const ytdGross = ytdSpendMap.get(b.categoryId) ?? 0;
-    const ytdCredits = ytdIncomeMap.get(b.categoryId) ?? 0;
-    const ytd = isIncome ? (ytdIncomeMap.get(b.categoryId) ?? 0) : ytdGross - ytdCredits;
-
-    // Relevant prior months: this category had a budget AND the month had any transactions
-    const catBudgetByMonth = new Map<string, number>();
-    for (const b2 of d.budgets) {
-      if (b2.categoryId === b.categoryId) catBudgetByMonth.set(b2.month, b2.targetAmount);
-    }
-    const relevantPriorMonths = priorMonths.filter((pm) => monthsWithTxns.has(pm) && catBudgetByMonth.has(pm));
-    const ytdTarget = relevantPriorMonths.reduce((s, pm) => s + (catBudgetByMonth.get(pm) ?? 0), 0);
-    const ytdDiff = ytd - ytdTarget;
-    const relevantMonthCount = relevantPriorMonths.length;
-    const ytdAvgDiff = relevantMonthCount > 0 ? ytdDiff / relevantMonthCount : 0;
-
-    return {
-      categoryId: b.categoryId,
-      categoryName: _catMap.get(b.categoryId) ?? '?',
-      note: cat?.note,
-      budgetNote: b.note,
-      target: b.targetAmount,
-      spent: isIncome ? credits : grossSpent - credits,
-      ytd, ytdTarget, ytdDiff, ytdAvgDiff, relevantMonthCount, isIncome,
-      groupId: b.groupId ?? null,
-      sortOrder: (b as { sortOrder?: number }).sortOrder ?? 0,
-    };
-  });
-  // Sum income received from ALL income categories, regardless of whether a budget entry exists
-  const allIncomeCatIds = new Set(
-    categories.filter((c) => c.isIncome || INCOME_CATEGORY_NAMES.has(c.name)).map((c) => c.id)
-  );
-  let allIncomeReceived = 0;
-  for (const [catId, amount] of incomeByCategory) {
-    if (allIncomeCatIds.has(catId)) allIncomeReceived += amount;
-  }
-
-  return { rows, priorMonthCount: priorMonths.length, allIncomeReceived };
 }
 
 function groupRows(rows: BudgetRow[], groups: BudgetGroup[]): { group: BudgetGroup | null; rows: BudgetRow[] }[] {
@@ -208,6 +82,9 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   const [catRenameName, setCatRenameName] = useState('');
   const [priorMonthCount, setPriorMonthCount] = useState(0);
   const [allIncomeReceived, setAllIncomeReceived] = useState(0);
+  const [uncatTotal, setUncatTotal] = useState(0);
+  const [offBudgetTotal, setOffBudgetTotal] = useState(0);
+  const [projection, setProjection] = useState<MonthProjection | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [editNoteId, setEditNoteId] = useState<number | null>(null);
   const [editNoteText, setEditNoteText] = useState('');
@@ -312,6 +189,9 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
       setRows(result.rows);
       setPriorMonthCount(result.priorMonthCount);
       setAllIncomeReceived(result.allIncomeReceived);
+      setUncatTotal(result.uncatTotal);
+      setOffBudgetTotal(result.offBudgetTotal);
+      setProjection(month === currentMonth() ? projectCurrentMonth(d, month) : null);
       setColorThresholdsState(getColorThresholds());
     }
     refresh();
@@ -577,15 +457,16 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   async function saveEdit(categoryId: number) {
     const row = rows.find((r) => r.categoryId === categoryId);
     const newTarget = parseFloat(editTarget);
-    pushUndoSnapshot();
-    await upsertBudget(month, categoryId, newTarget, row?.groupId);
-    if (editPastMonths) {
-      const d = getData();
-      const pastBudgets = d.budgets.filter((b) => b.month < month && b.categoryId === categoryId);
-      for (const b of pastBudgets) {
-        await upsertBudget(b.month, categoryId, newTarget, b.groupId);
+    await withUndo('Edit budget target', async () => {
+      await upsertBudget(month, categoryId, newTarget, row?.groupId);
+      if (editPastMonths) {
+        const d = getData();
+        const pastBudgets = d.budgets.filter((b) => b.month < month && b.categoryId === categoryId);
+        for (const b of pastBudgets) {
+          await upsertBudget(b.month, categoryId, newTarget, b.groupId);
+        }
       }
-    }
+    });
     setEditId(null);
     setEditPastMonths(false);
   }
@@ -638,7 +519,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
 
   const totalTarget = regularRows.reduce((s, r) => s + r.target, 0);
   const totalSpent = regularRows.reduce((s, r) => s + r.spent, 0);
-  const totalRemaining = regularRows.reduce((s, r) => s + Math.max(0, r.target - r.spent), 0);
+  const totalRemaining = regularRows.reduce((s, r) => s + Math.max(0, r.target + r.carry - r.spent), 0);
   const spentFromSavings = savingsRows.reduce((s, r) => s + r.spent, 0);
   const totalIncome = incomeRows.reduce((s, r) => s + r.target, 0);
   const totalReceived = allIncomeReceived;
@@ -650,59 +531,6 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   const [y, mon] = month.split('-').map(Number);
   const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const curYear = new Date().getFullYear();
-
-  // Uncategorized transactions for the current month
-  const uncatTotal = (() => {
-    const d = getData();
-    const monthStart = `${month}-01`;
-    const monthEnd = `${month}-31`;
-    const splitsByTxn2 = new Map<number, { categoryId: number }[]>();
-    for (const s of d.transactionSplits) {
-      const arr = splitsByTxn2.get(s.transactionId) ?? [];
-      arr.push(s);
-      splitsByTxn2.set(s.transactionId, arr);
-    }
-    let total = 0;
-    for (const t of d.transactions) {
-      if (t.txnDate < monthStart || t.txnDate > monthEnd) continue;
-      if (t.ignoreInBudget) continue;
-      const splits = splitsByTxn2.get(t.id);
-      if (splits && splits.length > 0) continue; // split = categorized
-      if (t.categoryId == null) total += t.amount;
-    }
-    return total;
-  })();
-
-  // Spending in categories that are NOT in the current month's budget
-  const offBudgetTotal = (() => {
-    const d = getData();
-    const budgetCatIds = new Set(d.budgets.filter((b) => b.month === month).map((b) => b.categoryId));
-    const monthStart = `${month}-01`;
-    const monthEnd = `${month}-31`;
-    const splitsByTxn2 = new Map<number, { categoryId: number; amount: number }[]>();
-    for (const s of d.transactionSplits) {
-      const arr = splitsByTxn2.get(s.transactionId) ?? [];
-      arr.push(s);
-      splitsByTxn2.set(s.transactionId, arr);
-    }
-    const incomeCatIds = new Set(
-      d.categories.filter((c) => c.isIncome || INCOME_CATEGORY_NAMES.has(c.name)).map((c) => c.id)
-    );
-    let total = 0;
-    for (const t of d.transactions) {
-      if (t.txnDate < monthStart || t.txnDate > monthEnd) continue;
-      if (t.ignoreInBudget) continue;
-      const splits = splitsByTxn2.get(t.id);
-      if (splits && splits.length > 0) {
-        for (const s of splits) {
-          if (!budgetCatIds.has(s.categoryId) && !incomeCatIds.has(s.categoryId)) total += s.amount;
-        }
-      } else if (t.categoryId != null && !budgetCatIds.has(t.categoryId) && !incomeCatIds.has(t.categoryId)) {
-        total += t.amount;
-      }
-    }
-    return total;
-  })();
 
   return (
     <div style={{ maxWidth: 1400, margin: '0 auto' }}>
@@ -825,6 +653,15 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
         </div>
         );
       })()}
+
+      {projection && (
+        <div style={{ fontSize: '0.8rem', marginBottom: '0.75rem', color: 'var(--text-2)' }}>
+          Projected month-end:{' '}
+          <strong style={{ color: projection.projectedNet >= 0 ? '#16a34a' : '#dc2626' }}>
+            {projection.projectedNet >= 0 ? '+' : '−'}${formatAmount(Math.abs(projection.projectedNet), 0)}
+          </strong>
+        </div>
+      )}
 
       {/* Uncategorized sum banner — below summary, above budget rows */}
       {uncatTotal > 0 && (
@@ -1050,25 +887,25 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                             </span>
                           </div>
                           {/* Centre: spent / left — absolute, centred horizontally over bar */}
-                          {(r.target > 0 || r.spent > 0) && (
+                          {(r.target + r.carry > 0 || r.spent > 0) && (
                             <span
                               style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', fontSize: '0.8rem', whiteSpace: 'nowrap', cursor: onNavigateToTransactions ? 'pointer' : 'default', userSelect: 'none' }}
                               onClick={() => onNavigateToTransactions?.(month, r.categoryId)}
                             >
                               <strong>${formatAmount(r.spent, 0)}</strong>
-                              <span style={{ opacity: 0.5 }}>{r.target > 0 ? ' spent · ' : ' spent'}</span>
-                              {r.target > 0 && (r.spent > r.target ? (
-                                <><strong style={{ color: budgetDiffColor(r.spent - r.target, r.target, colorThresholds) }}>${formatAmount(r.spent - r.target, 0)}</strong><span style={{ opacity: 0.5 }}> over</span></>
+                              <span style={{ opacity: 0.5 }}>{r.target + r.carry > 0 ? ' spent · ' : ' spent'}</span>
+                              {r.target + r.carry > 0 && (r.spent > r.target + r.carry ? (
+                                <><strong style={{ color: budgetDiffColor(r.spent - (r.target + r.carry), r.target + r.carry, colorThresholds) }}>${formatAmount(r.spent - (r.target + r.carry), 0)}</strong><span style={{ opacity: 0.5 }}> over</span></>
                               ) : (
-                                <><strong style={{ color: '#16a34a' }}>${formatAmount(r.target - r.spent, 0)}</strong><span style={{ opacity: 0.5 }}> left</span></>
+                                <><strong style={{ color: '#16a34a' }}>${formatAmount(r.target + r.carry - r.spent, 0)}</strong><span style={{ opacity: 0.5 }}> left</span></>
                               ))}
                             </span>
                           )}
                         </div>
                         {/* Progress bar — in flow, directly below text */}
-                        {r.target > 0 && (() => {
-                          const ratio = r.spent / r.target;
-                          const overAmt = r.spent - r.target;
+                        {r.target + r.carry > 0 && (() => {
+                          const ratio = r.spent / (r.target + r.carry);
+                          const overAmt = r.spent - (r.target + r.carry);
                           const overPct = (ratio - 1) * 100;
                           const barColor = ratio > 1 && overPct > colorThresholds.redPct && overAmt > colorThresholds.redAbs
                             ? '#dc2626'
@@ -1128,6 +965,11 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                           <span style={{ fontWeight: 700, cursor: 'pointer' }}
                             onClick={() => { setEditId(r.categoryId); setEditTarget(String(r.target)); setEditPastMonths(false); }}>
                             ${formatAmount(r.target, 0)}
+                          </span>
+                        )}
+                        {r.carry !== 0 && (
+                          <span title="Rollover from previous months" style={{ marginLeft: 6, fontSize: '0.7rem', fontWeight: 600, color: r.carry > 0 ? '#16a34a' : '#dc2626' }}>
+                            {r.carry > 0 ? '+' : '−'}${formatAmount(Math.abs(r.carry), 0)} carried
                           </span>
                         )}
                       </td>
@@ -1245,7 +1087,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
         <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div className="field" style={{ marginBottom: 0 }}>
             <label>Existing category</label>
-            <SearchableSelect options={categories.map((c) => ({ value: c.id, label: c.name }))}
+            <SearchableSelect options={categories.filter((c) => !c.archived).map((c) => ({ value: c.id, label: c.name }))}
               value={newCatId}
               onChange={(v) => { setNewCatId(v === '' ? '' : Number(v)); if (v !== '') setNewCatName(''); }}
               placeholder="Select..." />
