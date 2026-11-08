@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.8.0](https://github.com/Kll7Ordin/kestl/compare/v2.7.0...v2.8.0) (2026-11-08)
+
+
+### Features
+
+* debounced saves, per-action undo, backups, data integrity, shared spend math, transfers, rollover and forecast ([dc4410a](https://github.com/Kll7Ordin/kestl/commit/dc4410a3d5ac67aa3d77eae7e0df8ea2b1ac8f19))
+* **tauri:** atomic conflict-checked saves, path validation, CSP and verified Ollama install ([af2f963](https://github.com/Kll7Ordin/kestl/commit/af2f9636eed21d3f31421eb316042ebda87eab6c))
+
+
+### Bug Fixes
+
+* spending breakdown filtering out valid categories in Month and 12M/YTD views ([4558be4](https://github.com/Kll7Ordin/kestl/commit/4558be4736f171afde7303b1594fafe5f4abf508))
+
 ## [2.7.0](https://github.com/Kll7Ordin/kestl/compare/v2.6.0...v2.7.0) (2026-07-14)
 
 
