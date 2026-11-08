@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { readFileSync } from 'fs';
@@ -11,6 +12,7 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(APP_VERSION),
   },
+  test: { environment: 'node', include: ['src/**/*.test.ts'] },
   clearScreen: false,
   server: {
     host: host || '0.0.0.0',
