@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useSyncExternalStore, useEffect, useRef } from 'react';
+import { useState, useMemo, useSyncExternalStore, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   getData,
@@ -18,11 +18,20 @@ import { SearchableSelect } from './SearchableSelect';
 import { TransactionLookup } from './TransactionLookup';
 import { formatAmount } from '../utils/format';
 import type { CategorySuggestion } from '../logic/llm';
-import { isCredit, isPaypalLinked } from '../logic/txnKind';
+import { isCredit } from '../logic/txnKind';
+import { TxnRow, DescriptorTooltip, type DescriptorTooltipHandle, type TxnRowActions } from './TransactionRow';
 
 function currentMonth(): string {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Transactions are mutated in place by db.ts, so the object reference alone can't tell memo
+ * that a row changed. This string covers every field the row displays.
+ */
+function txnRowSignature(t: Transaction): string {
+  return `${t.txnDate}|${t.amount}|${t.categoryId}|${t.linkedTransactionId}|${t.ignoreInBudget ? 1 : 0}|${t.isTransfer ? 1 : 0}|${t.starred ? 1 : 0}|${t.starNote ? 1 : 0}|${t.comment ? 1 : 0}|${t.instrument}|${t.descriptor}`;
 }
 
 function useAppData() {
@@ -79,22 +88,24 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [lookupTxn, setLookupTxn] = useState<Transaction | null>(null);
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
-  const [tooltip, setTooltip] = useState<{ text: string; top: number; left: number; flipUp: boolean } | null>(null);
-
-  const showTooltip = useCallback((e: React.MouseEvent<HTMLTableCellElement>) => {
-    const cell = e.currentTarget;
-    const text = cell.getAttribute('data-tooltip') || '';
-    if (!text) return;
-    const rect = cell.getBoundingClientRect();
-    const spaceBelow = window.innerHeight - rect.bottom;
-    const flipUp = spaceBelow < 80;
-    const top = flipUp ? rect.top - 4 : rect.bottom + 4;
-    setTooltip({ text, top, left: rect.left, flipUp });
-  }, []);
-
-  const hideTooltip = useCallback(() => {
-    setTooltip(null);
-  }, []);
+  const tooltipRef = useRef<DescriptorTooltipHandle>(null);
+  // Rows read handlers through this ref so they stay memoized across parent re-renders.
+  const rowActions = useRef<TxnRowActions>(null!);
+  rowActions.current = {
+    assignCategory: (id, catId) => { void assignCategory(id, catId); },
+    setEditingCategory: setEditingCategoryId,
+    toggleStar: (t) => { void toggleStar(t); },
+    editStarNote: startEditStarNote,
+    toggleTransfer: (t) => { void updateTransaction(t.id, { isTransfer: t.isTransfer ? undefined : true }); },
+    openRule: openRuleModal,
+    openSplit: setSplitTxn,
+    openMoveMonth,
+    editComment: startEditComment,
+    lookup: (t) => { onNeedOllama?.(); setLookupTxn(t); },
+    confirmDelete: setConfirmDeleteId,
+    showTooltip: (cell) => tooltipRef.current?.show(cell),
+    hideTooltip: () => tooltipRef.current?.hide(),
+  };
 
   // Manual transaction form state
   const [mDate, setMDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -574,161 +585,30 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
             {(() => {
               let catIdx = 0, uncatIdx = 0;
               return txns.slice(0, limit).map((t) => {
-              const splits = t.id !== undefined ? splitsMap.get(t.id) : undefined;
-              const isCategorized = t.isTransfer || t.categoryId != null || (splits != null && splits.length > 0);
-              const rowClass = t.isTransfer ? 'txn-row-categorized' : isCategorized
-                ? `txn-row-categorized ${catIdx++ % 2 === 0 ? '' : 'txn-row-categorized-alt'}`
-                : `txn-row-uncat ${uncatIdx++ % 2 === 0 ? '' : 'txn-row-uncat-alt'}`;
-              return (
-                <tr key={t.id} className={rowClass} style={t.isTransfer ? { opacity: 0.55 } : undefined}>
-                  <td style={{ whiteSpace: 'nowrap' }}>{t.txnDate}</td>
-                  <td className="descriptor-cell" data-tooltip={t.descriptor} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
-                    <span className="descriptor-text">{t.descriptor}</span>
-                    {t.isTransfer && <span className="chip" style={{ marginLeft: '4px', background: '#64748b', color: '#fff' }}>Transfer</span>}
-                    {isPaypalLinked(t) && <span className="chip" style={{ marginLeft: '4px', background: '#8b5cf6', color: '#fff' }}>PayPal</span>}
-                    {t.linkedTransactionId && !isPaypalLinked(t) && <span className="chip" style={{ marginLeft: '4px' }}>linked</span>}
-                  </td>
-                  <td>{t.instrument}</td>
-                  <td className={`num budget-num ${isCredit(t) || t.amount < 0 ? 'positive' : 'txn-neg'}`}>
-                    {t.amount === 0 ? '' : isCredit(t) || t.amount < 0 ? '+' : '-'}${formatAmount(Math.abs(t.amount))}
-                  </td>
-                  <td>
-                    {splits && splits.length > 0 ? (
-                      <span className="chip" title={splits.map(s => `${catMap.get(s.categoryId) ?? '?'}: $${formatAmount(s.amount)}`).join(', ')}>
-                        Split ({splits.length})
-                      </span>
-                    ) : (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
-                        {/* Actual category — chip if assigned, dropdown if uncategorized or editing */}
-                        {t.categoryId != null && editingCategoryId !== t.id ? (
-                          <span
-                            className="chip"
-                            style={{ cursor: 'pointer', background: catColorMap.get(t.categoryId) ?? '#888', color: '#fff', whiteSpace: 'nowrap', fontWeight: 600 }}
-                            title="Click to change category"
-                            onClick={() => setEditingCategoryId(t.id)}
-                          >
-                            {catMap.get(t.categoryId) ?? '?'}
-                          </span>
-                        ) : (
-                          <SearchableSelect
-                            options={categoryOptions}
-                            value={t.categoryId ?? ''}
-                            onChange={(v) => {
-                              assignCategory(t.id, v === '' ? null : Number(v));
-                              setEditingCategoryId(null);
-                            }}
-                            placeholder="Uncategorized"
-                            compact
-                            style={{ fontSize: '0.67rem' }}
-                          />
-                        )}
-                        {/* Suggestion chip — history-based */}
-                        {t.categoryId == null && allSuggestions.has(t.id) && (() => {
-                          const s = allSuggestions.get(t.id)!;
-                          const baseColor = catColorMap.get(s.categoryId) ?? '#888';
-                          const scores = historyScoresMap.get(t.id);
-                          let tooltipText = 'History match — click to accept';
-                          if (scores && scores.size > 0) {
-                            const lines = [...scores.entries()]
-                              .sort((a, b) => b[1] - a[1])
-                              .slice(0, 6)
-                              .map(([catId, pts]) => {
-                                const name = categories.find((c) => c.id === catId)?.name ?? catId;
-                                return `${name}: ${pts} pts`;
-                              });
-                            tooltipText += '\n' + lines.join('\n');
-                          }
-                          return (
-                            <span
-                              className="chip"
-                              style={{
-                                cursor: 'pointer',
-                                background: baseColor + '33',
-                                color: baseColor,
-                                border: `1px solid ${baseColor}66`,
-                                whiteSpace: 'nowrap',
-                                fontSize: '0.67rem',
-                                fontWeight: 500,
-                              }}
-                              title={tooltipText}
-                              onClick={() => assignCategory(t.id, s.categoryId)}
-                            >
-                              ~{s.categoryName}
-                            </span>
-                          );
-                        })()}
-                      </div>
-                    )}
-                  </td>
-                  <td className="txn-action-cell">
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => toggleStar(t)}
-                      title={t.starred ? 'Unstar transaction' : 'Star transaction'}
-                      style={{ color: t.starred ? '#fbbf24' : undefined, fontWeight: t.starred ? 'bold' : 'normal' }}
-                    >
-                      {t.starred ? '★' : '☆'}
-                    </button>
-                    {t.starred && (
-                      <button
-                        className={`btn btn-sm ${t.starNote ? 'btn-warning' : 'btn-ghost'}`}
-                        onClick={() => startEditStarNote(t)}
-                        title={t.starNote ? 'View/edit star note' : 'Add star note'}
-                        style={{ fontWeight: t.starNote ? 'bold' : 'normal' }}
-                      >
-                        🏷
-                      </button>
-                    )}
-                    <button
-                      className={`btn btn-sm ${t.isTransfer ? 'btn-warning' : 'btn-ghost'}`}
-                      onClick={() => updateTransaction(t.id, { isTransfer: t.isTransfer ? undefined : true })}
-                      title={t.isTransfer ? 'Unmark transfer' : 'Mark as transfer between your own accounts'}
-                    >
-                      ⇄
-                    </button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => openRuleModal(t)} title="Create rule">
-                      Create Rule
-                    </button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => setSplitTxn(t)} title="Split transaction">
-                      Split Txn
-                    </button>
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => openMoveMonth(t)}
-                      title="Count in different month"
-                    >
-                      📅
-                    </button>
-                    <button
-                      className={`btn btn-sm ${t.comment ? 'btn-warning' : 'btn-ghost'}`}
-                      onClick={() => startEditComment(t)}
-                      title={t.comment ? 'View/edit comment' : 'Add comment'}
-                      style={{ fontWeight: t.comment ? 'bold' : 'normal' }}
-                    >
-                      💬
-                    </button>
-                    {txnAiLookupEnabled && (
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => { onNeedOllama?.(); setLookupTxn(t); }}
-                        title="Identify this transaction with AI"
-                        style={{ fontWeight: 600, opacity: 0.7 }}
-                      >
-                        ?
-                      </button>
-                    )}
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() => setConfirmDeleteId(t.id)}
-                      title="Delete transaction"
-                      style={{ color: 'var(--red)', fontWeight: 600 }}
-                    >
-                      🗑
-                    </button>
-                  </td>
-                </tr>
-              );
-            });
+                const splits = splitsMap.get(t.id);
+                const isCategorized = t.isTransfer || t.categoryId != null || (splits != null && splits.length > 0);
+                const rowClass = t.isTransfer ? 'txn-row-categorized' : isCategorized
+                  ? `txn-row-categorized ${catIdx++ % 2 === 0 ? '' : 'txn-row-categorized-alt'}`
+                  : `txn-row-uncat ${uncatIdx++ % 2 === 0 ? '' : 'txn-row-uncat-alt'}`;
+                const suggestion = t.categoryId == null ? allSuggestions.get(t.id) : undefined;
+                return (
+                  <TxnRow
+                    key={t.id}
+                    t={t}
+                    sig={txnRowSignature(t)}
+                    rowClass={rowClass}
+                    splits={splits}
+                    isEditingCategory={editingCategoryId === t.id}
+                    suggestion={suggestion}
+                    scores={suggestion ? historyScoresMap.get(t.id) : undefined}
+                    catMap={catMap}
+                    catColorMap={catColorMap}
+                    categoryOptions={categoryOptions}
+                    aiLookupEnabled={!!txnAiLookupEnabled}
+                    actions={rowActions}
+                  />
+                );
+              });
             })()}
             {txns.length > limit && (
               <tr><td colSpan={6} style={{ textAlign: 'center' }}>
@@ -1056,16 +936,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
           </div>
         </div>
       )}
-      {tooltip && createPortal(
-        <div className="descriptor-tooltip" style={{
-          top: tooltip.top,
-          left: tooltip.left,
-          transform: tooltip.flipUp ? 'translateY(-100%)' : undefined,
-        }}>
-          {tooltip.text}
-        </div>,
-        document.body,
-      )}
+      <DescriptorTooltip ref={tooltipRef} />
 
       {lookupTxn && (
         <TransactionLookup
