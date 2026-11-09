@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.9.0](https://github.com/Kll7Ordin/kestl/compare/v2.8.0...v2.9.0) (2026-11-09)
+
+
+### Features
+
+* **transactions:** export shown transactions to CSV, find and remove duplicates, faster list ([7397344](https://github.com/Kll7Ordin/kestl/commit/739734463614232b2f81ac7bbf08c176d5d8e06f))
+
+
+### Bug Fixes
+
+* **import:** catch duplicates when the bank renames a merchant between exports ([09a7a1d](https://github.com/Kll7Ordin/kestl/commit/09a7a1d6a618cd012bb5860cf3346032c1da56a2))
+
 ## [2.8.0](https://github.com/Kll7Ordin/kestl/compare/v2.7.0...v2.8.0) (2026-11-08)
 
 
