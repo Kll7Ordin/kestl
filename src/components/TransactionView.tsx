@@ -1,4 +1,4 @@
-import { useState, useMemo, useSyncExternalStore, useEffect, useRef } from 'react';
+import { useState, useMemo, useSyncExternalStore, useEffect, useRef, useDeferredValue } from 'react';
 import { createPortal } from 'react-dom';
 import {
   getData,
@@ -20,6 +20,10 @@ import { formatAmount } from '../utils/format';
 import type { CategorySuggestion } from '../logic/llm';
 import { isCredit } from '../logic/txnKind';
 import { TxnRow, DescriptorTooltip, type DescriptorTooltipHandle, type TxnRowActions } from './TransactionRow';
+import { useWindowedRows } from './useWindowedRows';
+import { findExistingDuplicates, type DuplicateGroup } from '../logic/duplicates';
+import { transactionsToCsv, saveTransactionsCsv } from '../utils/export';
+import { runBackup } from '../backup';
 
 function currentMonth(): string {
   const d = new Date();
@@ -88,7 +92,11 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [lookupTxn, setLookupTxn] = useState<Transaction | null>(null);
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [dupGroups, setDupGroups] = useState<DuplicateGroup[] | null>(null);
+  const [dupChecked, setDupChecked] = useState<Set<number>>(new Set());
   const tooltipRef = useRef<DescriptorTooltipHandle>(null);
+  const tbodyRef = useRef<HTMLTableSectionElement>(null);
   // Rows read handlers through this ref so they stay memoized across parent re-renders.
   const rowActions = useRef<TxnRowActions>(null!);
   rowActions.current = {
@@ -122,8 +130,6 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [offBudgetFilter, setOffBudgetFilter] = useState(false);
   const [starredFilter, setStarredFilter] = useState(false);
   const [transferFilter, setTransferFilter] = useState(false);
-  const PAGE = 300;
-  const [limit, setLimit] = useState(PAGE);
   const navFilterApplied = useRef(false);
 
   // Apply nav filter from external navigation (e.g. clicking "Spent" in Budget view)
@@ -141,17 +147,19 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
 
   const splitsMap = useMemo(() => getSplitsIndex({ transactionSplits: allSplits }), [allSplits]);
 
-  const catMap = useMemo(() => new Map(categories.map((c) => [c.id!, c.name])), [categories]);
-  const catColorMap = useMemo(() => new Map(categories.map((c) => [c.id!, c.color ?? '#888'])), [categories]);
-  const categoryOptions = useMemo(() => categories.filter((c) => !c.archived).map((c) => ({ value: c.id, label: c.name })), [categories]);
-  const filterCategoryOptions = useMemo(() => categories.map((c) => ({ value: c.id, label: c.archived ? `${c.name} (archived)` : c.name })), [categories]);
+  // db.ts hands out fresh array references on every save, so key the category-derived props on
+  // their content. Otherwise every edit gives each row new props and re-renders the whole table.
+  const catKey = categories.map((c) => `${c.id}\u0001${c.name}\u0001${c.color ?? ''}\u0001${c.archived ? 1 : 0}`).join('\u0002');
+  /* eslint-disable react-hooks/exhaustive-deps -- deliberately keyed on catKey, see above */
+  const catMap = useMemo(() => new Map(categories.map((c) => [c.id!, c.name])), [catKey]);
+  const catColorMap = useMemo(() => new Map(categories.map((c) => [c.id!, c.color ?? '#888'])), [catKey]);
+  const categoryOptions = useMemo(() => categories.filter((c) => !c.archived).map((c) => ({ value: c.id, label: c.name })), [catKey]);
+  const filterCategoryOptions = useMemo(() => categories.map((c) => ({ value: c.id, label: c.archived ? `${c.name} (archived)` : c.name })), [catKey]);
+  /* eslint-enable react-hooks/exhaustive-deps */
   const instrumentOptions = useMemo(() =>
     [...new Set(allTransactions.map((t) => t.instrument).filter(Boolean))].sort().map((i) => ({ value: i, label: i })),
     [allTransactions],
   );
-
-  // Reset pagination when filters change
-  useEffect(() => { setLimit(PAGE); }, [monthFilter, catFilter, categoryFilter, instrumentFilter, starredFilter, offBudgetFilter, transferFilter, search]);
 
   const txns = useMemo(() => {
     const monthStart = `${month}-01`;
@@ -195,10 +203,13 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
 
   // Suggestions scored against all uncategorized transactions — not filtered by visible txns,
   // so month/search filter changes don't retrigger batchGetGuessScores.
+  // Deferred: after a category click React paints the row first, then rescores in the background.
+  const suggestTxns = useDeferredValue(allTransactions);
+  const suggestSplits = useDeferredValue(splitsMap);
   const { allSuggestions, historyScoresMap } = useMemo(() => {
-    const uncatAll = allTransactions.filter((t) => t.categoryId == null && !isCredit(t) && !t.isTransfer && !splitsMap.has(t.id));
+    const uncatAll = suggestTxns.filter((t) => t.categoryId == null && !isCredit(t) && !t.isTransfer && !suggestSplits.has(t.id));
     const queries = uncatAll.map((t) => ({ id: t.id, descriptor: t.descriptor }));
-    const scoresMap = batchGetGuessScores(queries, allTransactions);
+    const scoresMap = batchGetGuessScores(queries, suggestTxns);
     const suggestions = new Map<number, CategorySuggestion>();
     const catMapLocal = new Map(categories.map((c) => [c.id, c]));
     for (const t of uncatAll) {
@@ -212,7 +223,81 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       if (cat) suggestions.set(t.id, { txnId: t.id, categoryId: catId, categoryName: cat.name });
     }
     return { allSuggestions: suggestions, historyScoresMap: scoresMap };
-  }, [allTransactions, categories, splitsMap]);
+  }, [suggestTxns, categories, suggestSplits]);
+
+  // Row stripe classes for every filtered row (cheap strings), so windowing doesn't change striping.
+  const rowClasses = useMemo(() => {
+    let catIdx = 0, uncatIdx = 0;
+    return txns.map((t) => {
+      const splits = splitsMap.get(t.id);
+      const isCategorized = t.isTransfer || t.categoryId != null || (splits != null && splits.length > 0);
+      return t.isTransfer ? 'txn-row-categorized' : isCategorized
+        ? `txn-row-categorized ${catIdx++ % 2 === 0 ? '' : 'txn-row-categorized-alt'}`
+        : `txn-row-uncat ${uncatIdx++ % 2 === 0 ? '' : 'txn-row-uncat-alt'}`;
+    });
+  }, [txns, splitsMap]);
+
+  const win = useWindowedRows(txns.length, tbodyRef);
+
+  function suggestionTitleFor(txnId: number): string {
+    let title = 'History match — click to accept';
+    const scores = historyScoresMap.get(txnId);
+    if (scores && scores.size > 0) {
+      title += '\n' + [...scores.entries()]
+        .sort((x, y) => y[1] - x[1])
+        .slice(0, 6)
+        .map(([catId, pts]) => `${catMap.get(catId) ?? catId}: ${pts} pts`)
+        .join('\n');
+    }
+    return title;
+  }
+
+  async function exportDisplayed() {
+    setExportStatus(null);
+    try {
+      const csv = transactionsToCsv(txns, (id) => catMap.get(id), (id) => splitsMap.get(id));
+      const today = new Date().toISOString().slice(0, 10);
+      const scope = monthFilter === 'all' ? 'all-months' : monthFilter;
+      const path = await saveTransactionsCsv(csv, `transactions-${scope}-${today}.csv`);
+      if (path) setExportStatus(`Exported ${txns.length} transaction${txns.length !== 1 ? 's' : ''} to ${path.split('/').pop()}`);
+    } catch (e) {
+      setExportStatus(`Export failed: ${String(e)}`);
+    }
+  }
+
+  function openDuplicateFinder() {
+    const groups = findExistingDuplicates(getData());
+    setDupGroups(groups);
+    setDupChecked(new Set(groups.flatMap((g) => g.extras.map((t) => t.id))));
+  }
+
+  async function removeCheckedDuplicates() {
+    if (!dupGroups) return;
+    const ids = [...dupChecked];
+    if (ids.length === 0) { setDupGroups(null); return; }
+    await runBackup('pre-purge');
+    await withUndo('Remove duplicate transactions', async () => {
+      // Carry over anything the removed copies had that the kept copy lacks.
+      for (const g of dupGroups) {
+        const removed = g.extras.filter((t) => dupChecked.has(t.id));
+        if (removed.length === 0) continue;
+        const keepHasSplits = (splitsMap.get(g.keep.id)?.length ?? 0) > 0;
+        const updates: Partial<Transaction> = {};
+        const withCat = removed.find((t) => t.categoryId != null);
+        if (g.keep.categoryId == null && !keepHasSplits && withCat) updates.categoryId = withCat.categoryId;
+        const comments = removed.map((t) => t.comment).filter((c): c is string => !!c && c !== g.keep.comment);
+        if (comments.length > 0) updates.comment = [g.keep.comment, ...comments].filter(Boolean).join(' ');
+        if (!g.keep.starred && removed.some((t) => t.starred)) updates.starred = true;
+        if (!g.keep.starNote) {
+          const note = removed.find((t) => t.starNote)?.starNote;
+          if (note) updates.starNote = note;
+        }
+        if (Object.keys(updates).length > 0) await updateTransaction(g.keep.id, updates);
+      }
+      await deleteTransactions(ids);
+    });
+    setDupGroups(null);
+  }
 
   const uncatCount = useMemo(
     () => allTransactions.filter((t) => !t.isTransfer && !txnIsCategorized(t, splitsMap)).length,
@@ -499,13 +584,35 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
         />
         <span style={{ fontSize: '0.875rem', opacity: 0.6 }}>{txns.length} transactions</span>
         <button
+          className="btn btn-ghost btn-sm"
+          onClick={() => { void exportDisplayed(); }}
+          disabled={txns.length === 0}
+          title="Export the transactions currently shown (respects all filters and search) to CSV"
+          style={{ marginLeft: 'auto' }}
+        >
+          Export CSV
+        </button>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={openDuplicateFinder}
+          title="Find bank transactions that were imported twice"
+        >
+          Find duplicates
+        </button>
+        <button
           className="btn btn-primary btn-sm"
           onClick={() => setShowAddForm(!showAddForm)}
-          style={{ marginLeft: 'auto' }}
         >
           {showAddForm ? 'Cancel' : '+ Add'}
         </button>
       </div>
+
+      {exportStatus && (
+        <div className="card" style={{ fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <span style={{ flex: 1 }}>{exportStatus}</span>
+          <button className="btn btn-ghost btn-sm" onClick={() => setExportStatus(null)}>×</button>
+        </div>
+      )}
 
       {showAddForm && (
         <div className="card">
@@ -581,41 +688,33 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
               <th></th>
             </tr>
           </thead>
-          <tbody>
-            {(() => {
-              let catIdx = 0, uncatIdx = 0;
-              return txns.slice(0, limit).map((t) => {
-                const splits = splitsMap.get(t.id);
-                const isCategorized = t.isTransfer || t.categoryId != null || (splits != null && splits.length > 0);
-                const rowClass = t.isTransfer ? 'txn-row-categorized' : isCategorized
-                  ? `txn-row-categorized ${catIdx++ % 2 === 0 ? '' : 'txn-row-categorized-alt'}`
-                  : `txn-row-uncat ${uncatIdx++ % 2 === 0 ? '' : 'txn-row-uncat-alt'}`;
-                const suggestion = t.categoryId == null ? allSuggestions.get(t.id) : undefined;
-                return (
-                  <TxnRow
-                    key={t.id}
-                    t={t}
-                    sig={txnRowSignature(t)}
-                    rowClass={rowClass}
-                    splits={splits}
-                    isEditingCategory={editingCategoryId === t.id}
-                    suggestion={suggestion}
-                    scores={suggestion ? historyScoresMap.get(t.id) : undefined}
-                    catMap={catMap}
-                    catColorMap={catColorMap}
-                    categoryOptions={categoryOptions}
-                    aiLookupEnabled={!!txnAiLookupEnabled}
-                    actions={rowActions}
-                  />
-                );
-              });
-            })()}
-            {txns.length > limit && (
-              <tr><td colSpan={6} style={{ textAlign: 'center' }}>
-                <button className="btn btn-ghost btn-sm" onClick={() => setLimit((l) => l + PAGE)}>
-                  Show more ({txns.length - limit} remaining)
-                </button>
-              </td></tr>
+          <tbody ref={tbodyRef}>
+            {win.padTop > 0 && (
+              <tr data-spacer="1" aria-hidden="true" style={{ height: win.padTop }}><td colSpan={6} style={{ padding: 0, border: 'none' }} /></tr>
+            )}
+            {txns.slice(win.start, win.end).map((t, i) => {
+              const suggestion = t.categoryId == null ? allSuggestions.get(t.id) : undefined;
+              return (
+                <TxnRow
+                  key={t.id}
+                  t={t}
+                  sig={txnRowSignature(t)}
+                  rowClass={rowClasses[win.start + i]}
+                  splits={splitsMap.get(t.id)}
+                  isEditingCategory={editingCategoryId === t.id}
+                  suggestionCatId={suggestion?.categoryId}
+                  suggestionName={suggestion?.categoryName}
+                  suggestionTitle={suggestion ? suggestionTitleFor(t.id) : undefined}
+                  catMap={catMap}
+                  catColorMap={catColorMap}
+                  categoryOptions={categoryOptions}
+                  aiLookupEnabled={!!txnAiLookupEnabled}
+                  actions={rowActions}
+                />
+              );
+            })}
+            {win.padBottom > 0 && (
+              <tr data-spacer="1" aria-hidden="true" style={{ height: win.padBottom }}><td colSpan={6} style={{ padding: 0, border: 'none' }} /></tr>
             )}
             {txns.length === 0 && (
               <tr><td colSpan={6} className="empty">{monthFilter === 'all' ? 'No transactions' : 'No transactions this month'}</td></tr>
@@ -936,6 +1035,73 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
           </div>
         </div>
       )}
+      {dupGroups && (
+        <div className="modal-overlay" onClick={() => setDupGroups(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 760, width: '100%' }}>
+            <h3>Duplicate transactions</h3>
+            {dupGroups.length === 0 ? (
+              <p style={{ fontSize: '0.875rem' }}>No duplicates found.</p>
+            ) : (
+              <>
+                <p style={{ fontSize: '0.8rem', opacity: 0.75, marginBottom: '0.75rem' }}>
+                  Same card, same date, same amount and the same merchant (the bank often renames a merchant
+                  between exports). Checked rows will be deleted; the kept copy inherits their category, comment
+                  and star if it has none. A backup is taken first and this can be undone.
+                </p>
+                <div style={{ maxHeight: '55vh', overflowY: 'auto' }}>
+                  {dupGroups.map((g) => (
+                    <div key={g.keep.id} className="card" style={{ marginBottom: '0.5rem', padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                      <div style={{ display: 'flex', gap: '0.75rem', opacity: 0.85 }}>
+                        <span style={{ whiteSpace: 'nowrap' }}>{g.keep.txnDate}</span>
+                        <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
+                          {isCredit(g.keep) || g.keep.amount < 0 ? '+' : '-'}${formatAmount(Math.abs(g.keep.amount))}
+                        </span>
+                        <span style={{ flex: 1 }}>{g.keep.instrument}</span>
+                        {g.identical && (
+                          <span style={{ color: 'var(--yellow)' }} title="Identical text can also mean two real purchases — check your statement">
+                            identical — verify
+                          </span>
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.3rem' }}>
+                        <span className="chip" style={{ background: 'var(--green)', color: '#fff' }}>keep</span>
+                        <span style={{ flex: 1 }}>{g.keep.descriptor}</span>
+                        <span style={{ opacity: 0.7 }}>{g.keep.categoryId != null ? catMap.get(g.keep.categoryId) ?? '' : (splitsMap.get(g.keep.id)?.length ? 'Split' : '')}</span>
+                      </div>
+                      {g.extras.map((t) => (
+                        <label key={t.id} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', marginTop: '0.25rem', cursor: 'pointer' }}>
+                          <input
+                            type="checkbox"
+                            checked={dupChecked.has(t.id)}
+                            onChange={() => setDupChecked((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(t.id)) next.delete(t.id); else next.add(t.id);
+                              return next;
+                            })}
+                          />
+                          <span style={{ flex: 1, textDecoration: dupChecked.has(t.id) ? 'line-through' : undefined, opacity: dupChecked.has(t.id) ? 0.6 : 1 }}>
+                            {t.descriptor}
+                          </span>
+                          <span style={{ opacity: 0.7 }}>{t.categoryId != null ? catMap.get(t.categoryId) ?? '' : ''}</span>
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            <div className="modal-actions">
+              <button className="btn btn-ghost" onClick={() => setDupGroups(null)}>Close</button>
+              {dupGroups.length > 0 && (
+                <button className="btn btn-danger" disabled={dupChecked.size === 0} onClick={() => { void removeCheckedDuplicates(); }}>
+                  Delete {dupChecked.size} duplicate{dupChecked.size !== 1 ? 's' : ''}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <DescriptorTooltip ref={tooltipRef} />
 
       {lookupTxn && (

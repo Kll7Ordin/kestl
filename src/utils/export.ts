@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { save } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
-import type { AppData } from '../db';
+import type { AppData, Transaction, TransactionSplit } from '../db';
 import { getBucketBalance } from '../logic/savings';
 import { INCOME_CATEGORY_NAMES } from '../seed';
 import { isCredit } from '../logic/txnKind';
@@ -204,4 +204,44 @@ export async function createReadableArchive(appData: AppData): Promise<string> {
 
   await invoke('save_base64', { path: savePath, data: base64 });
   return savePath;
+}
+
+// ── Transactions CSV (whatever the Transactions view is currently showing) ──
+
+function csvField(v: string): string {
+  return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+/**
+ * Build a CSV of the given transactions: Date, Descriptor, Instrument, Amount, Category, Note.
+ * Amount uses the sign shown in the app (spending negative, credits positive). Split transactions
+ * list each portion in Category; Note holds the comment and star note, if any.
+ */
+export function transactionsToCsv(
+  txns: Transaction[],
+  catName: (id: number) => string | undefined,
+  splitsFor: (txnId: number) => TransactionSplit[] | undefined,
+): string {
+  const lines = ['Date,Descriptor,Instrument,Amount,Category,Note'];
+  for (const t of txns) {
+    const credit = isCredit(t) || t.amount < 0;
+    const amount = (credit ? Math.abs(t.amount) : -Math.abs(t.amount)).toFixed(2);
+    const splits = splitsFor(t.id);
+    const category = splits && splits.length > 0
+      ? splits.map((s) => `${catName(s.categoryId) ?? '?'} ${Math.abs(s.amount).toFixed(2)}`).join('; ')
+      : t.categoryId != null ? catName(t.categoryId) ?? '' : '';
+    const note = [t.comment, t.starNote].filter(Boolean).join(' | ');
+    lines.push([t.txnDate, t.descriptor, t.instrument ?? '', amount, category, note].map(csvField).join(','));
+  }
+  return lines.join('\r\n') + '\r\n';
+}
+
+/** Ask where to save, then write the CSV. Returns the saved path, or null if cancelled. */
+export async function saveTransactionsCsv(csv: string, defaultName: string): Promise<string | null> {
+  const picked = await save({ defaultPath: defaultName, filters: [{ name: 'CSV File', extensions: ['csv'] }] });
+  if (!picked) return null;
+  // The Linux dialog doesn't always add the extension, and the backend only writes known extensions.
+  const path = /\.csv$/i.test(picked) ? picked : `${picked}.csv`;
+  await invoke('save_data', { path, data: csv });
+  return path;
 }

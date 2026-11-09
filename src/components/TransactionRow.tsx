@@ -1,7 +1,6 @@
 import { memo, forwardRef, useImperativeHandle, useState, useEffect, useRef, type MutableRefObject } from 'react';
 import { createPortal } from 'react-dom';
 import type { Transaction, TransactionSplit } from '../db';
-import type { CategorySuggestion } from '../logic/llm';
 import { SearchableSelect, type SearchableSelectOption } from './SearchableSelect';
 import { formatAmount } from '../utils/format';
 import { isCredit, isPaypalLinked } from '../logic/txnKind';
@@ -30,8 +29,10 @@ interface TxnRowProps {
   rowClass: string;
   splits: TransactionSplit[] | undefined;
   isEditingCategory: boolean;
-  suggestion: CategorySuggestion | undefined;
-  scores: Map<number, number> | undefined;
+  /** History-match suggestion, as primitives so memo can skip rows whose suggestion didn't change. */
+  suggestionCatId: number | undefined;
+  suggestionName: string | undefined;
+  suggestionTitle: string | undefined;
   catMap: Map<number, string>;
   catColorMap: Map<number, string>;
   categoryOptions: SearchableSelectOption[];
@@ -40,24 +41,12 @@ interface TxnRowProps {
 }
 
 export const TxnRow = memo(function TxnRow({
-  t, rowClass, splits, isEditingCategory, suggestion, scores,
+  t, rowClass, splits, isEditingCategory, suggestionCatId, suggestionName, suggestionTitle,
   catMap, catColorMap, categoryOptions, aiLookupEnabled, actions,
 }: TxnRowProps) {
   const a = () => actions.current;
   const credit = isCredit(t) || t.amount < 0;
-
-  let suggestionTitle = '';
-  if (suggestion) {
-    suggestionTitle = 'History match — click to accept';
-    if (scores && scores.size > 0) {
-      suggestionTitle += '\n' + [...scores.entries()]
-        .sort((x, y) => y[1] - x[1])
-        .slice(0, 6)
-        .map(([catId, pts]) => `${catMap.get(catId) ?? catId}: ${pts} pts`)
-        .join('\n');
-    }
-  }
-  const suggestionColor = suggestion ? catColorMap.get(suggestion.categoryId) ?? '#888' : '';
+  const suggestionColor = suggestionCatId != null ? catColorMap.get(suggestionCatId) ?? '#888' : '';
 
   return (
     <tr className={rowClass} style={t.isTransfer ? { opacity: 0.55 } : undefined}>
@@ -106,7 +95,7 @@ export const TxnRow = memo(function TxnRow({
                 style={{ fontSize: '0.67rem' }}
               />
             )}
-            {t.categoryId == null && suggestion && (
+            {t.categoryId == null && suggestionCatId != null && (
               <span
                 className="chip"
                 style={{
@@ -119,9 +108,9 @@ export const TxnRow = memo(function TxnRow({
                   fontWeight: 500,
                 }}
                 title={suggestionTitle}
-                onClick={() => a().assignCategory(t.id, suggestion.categoryId)}
+                onClick={() => a().assignCategory(t.id, suggestionCatId)}
               >
-                ~{suggestion.categoryName}
+                ~{suggestionName}
               </span>
             )}
           </div>

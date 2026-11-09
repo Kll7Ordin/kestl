@@ -74,6 +74,12 @@ function buildHighSpreadWords(transactions: Transaction[]): Set<string> {
   return result;
 }
 
+function trigrams(s: string): Set<string> {
+  const out = new Set<string>();
+  for (let i = 0; i < s.length - 2; i++) out.add(s.slice(i, i + 3));
+  return out;
+}
+
 // Compute fuzzy similarity (Dice coefficient on trigrams)
 function diceSimilarity(a: string, b: string): number {
   if (!a || !b) return 0;
@@ -143,7 +149,8 @@ export function getGuessScores(descriptor: string, transactions: Transaction[]):
 interface CorpusEntry {
   norm: string;
   stripped: string;
-  words: string[];
+  words: Set<string>;
+  tri: Set<string>; // trigrams of norm, precomputed once per corpus entry
   cats: Map<number, number>; // categoryId → how many corpus transactions share this descriptor
 }
 
@@ -168,17 +175,35 @@ export function batchGetGuessScores(
     const key = `${norm}\u0000${stripped}`;
     let e = unique.get(key);
     if (!e) {
-      e = { norm, stripped, words: stripped.split(/\s+/).filter((w) => w.length >= 3 && !isNoise(w)), cats: new Map() };
+      e = { norm, stripped, words: new Set(stripped.split(/\s+/).filter((w) => w.length >= 3 && !isNoise(w))), tri: trigrams(norm), cats: new Map() };
       unique.set(key, e);
     }
     e.cats.set(t.categoryId, (e.cats.get(t.categoryId) ?? 0) + 1);
   }
   const corpus = [...unique.values()];
-  const byNorm = new Map<string, CorpusEntry[]>();
-  for (const e of corpus) {
-    const arr = byNorm.get(e.norm);
-    if (arr) arr.push(e); else byNorm.set(e.norm, [e]);
-  }
+
+  // Inverted indexes (corpus position lists) so each query only visits entries that can score:
+  // an entry earns points only via the same norm, the same stripped text, a shared trigram
+  // (needed for Dice > 0) or a shared keyword. Everything else scores 0 and is skipped.
+  const push = (m: Map<string, number[]>, k: string, i: number) => {
+    const arr = m.get(k);
+    if (arr) arr.push(i); else m.set(k, [i]);
+  };
+  const byNorm = new Map<string, number[]>();
+  const byStripped = new Map<string, number[]>();
+  const byTrigram = new Map<string, number[]>();
+  const byWord = new Map<string, number[]>();
+  corpus.forEach((e, i) => {
+    push(byNorm, e.norm, i);
+    push(byStripped, e.stripped, i);
+    for (const t of e.tri) push(byTrigram, t, i);
+    for (const w of e.words) push(byWord, w, i);
+  });
+
+  // Scratch buffers reused across queries; `touched` lists the positions to reset.
+  const inter = new Uint32Array(corpus.length);
+  const sharedWords = new Uint32Array(corpus.length);
+  const seen = new Uint8Array(corpus.length);
 
   const memo = new Map<string, Map<number, number>>();
   const scoreOne = (descriptor: string): Map<number, number> => {
@@ -191,16 +216,26 @@ export function batchGetGuessScores(
     const scores = new Map<number, number>();
     const add = (catId: number, pts: number) => scores.set(catId, (scores.get(catId) ?? 0) + pts);
 
-    const exactSet = new Set(byNorm.get(norm) ?? []);
-    for (const e of exactSet) for (const [cat, n] of e.cats) add(cat, 40 * n);
+    const exact = new Set(byNorm.get(norm) ?? []);
+    for (const i of exact) for (const [cat, n] of corpus[i].cats) add(cat, 40 * n);
 
-    for (const e of corpus) {
-      if (exactSet.has(e)) continue;
-      if (e.stripped === stripped && stripped.length > 2) { for (const [cat, n] of e.cats) add(cat, 25 * n); continue; }
-      if (diceSimilarity(norm, e.norm) >= 0.6) { for (const [cat, n] of e.cats) add(cat, 10 * n); continue; }
-      let shared = 0;
-      for (const w of words) if (e.words.includes(w)) shared++;
-      if (shared > 0) for (const [cat, n] of e.cats) add(cat, shared * n);
+    const touched: number[] = [];
+    const touch = (i: number) => { if (!seen[i]) { seen[i] = 1; touched.push(i); } };
+    const tri = trigrams(norm);
+    for (const t of tri) for (const i of byTrigram.get(t) ?? []) { inter[i]++; touch(i); }
+    for (const w of words) for (const i of byWord.get(w) ?? []) { sharedWords[i]++; touch(i); }
+    if (stripped.length > 2) for (const i of byStripped.get(stripped) ?? []) touch(i);
+
+    // Visit in corpus order so score insertion order matches a full scan.
+    touched.sort((a, b) => a - b);
+    for (const i of touched) {
+      const e = corpus[i];
+      const total = tri.size + e.tri.size;
+      if (exact.has(i)) { /* already scored as exact */ }
+      else if (e.stripped === stripped && stripped.length > 2) { for (const [cat, n] of e.cats) add(cat, 25 * n); }
+      else if (total > 0 && (2 * inter[i]) / total >= 0.6) { for (const [cat, n] of e.cats) add(cat, 10 * n); }
+      else if (sharedWords[i] > 0) { for (const [cat, n] of e.cats) add(cat, sharedWords[i] * n); }
+      inter[i] = 0; sharedWords[i] = 0; seen[i] = 0;
     }
     memo.set(memoKey, scores);
     return scores;
