@@ -1,4 +1,4 @@
-import { getData, type Transaction } from '../db';
+import { getData, type AppData, type Transaction } from '../db';
 
 function normalize(s: string): string {
   return s.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -15,6 +15,26 @@ function normalizeInstrument(instrument: string): string {
   if (base === 'Card') return 'Scotiabank Credit Card CSV';
   if (base === 'Chequing') return 'Scotiabank Chequing CSV';
   return base;
+}
+
+/**
+ * Same merchant despite the bank reformatting its name between exports. Scotia rewrites
+ * descriptors after posting, both by renaming the tail ("koodo mobile" → "koodo stream plus",
+ * "telus" → "telus pre-auth payment") and by changing spacing/punctuation ("old navy" → "oldnavy.com",
+ * "walmart" → "wal-mart supercenter"). Match when the first 6 characters agree either as written
+ * (whitespace-collapsed) or with only letters and digits kept.
+ *
+ * PayPal-linked descriptors ("PayPal | <merchant> | ...") all share the same opening, so for those
+ * the merchant segment is compared instead.
+ */
+export function sameMerchant(a: string, b: string): boolean {
+  const paypal = /^\s*paypal\s*\|\s*([^|]*)/i;
+  const pa = a.match(paypal), pb = b.match(paypal);
+  if (pa && pb) return sameMerchant(pa[1], pb[1]);
+  const prefixMatch = (x: string, y: string) =>
+    x === y || (Math.min(x.length, y.length) >= 6 && x.slice(0, 6) === y.slice(0, 6));
+  const alnum = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  return prefixMatch(normalize(a), normalize(b)) || prefixMatch(alnum(a), alnum(b));
 }
 
 function dateToMs(dateStr: string): number {
@@ -46,7 +66,7 @@ export interface DuplicateResult {
  *    Credit cards show a pending transaction with one descriptor, then when it
  *    settles it appears in the next statement with a different descriptor and
  *    often a slightly different date. We treat same amount + same instrument
- *    within a ±5 day window as a duplicate for bank_csv.
+ *    within a ±5 day window as a duplicate for bank_csv, when sameMerchant() agrees.
  * 4. Prefix match: handles parser version differences where descriptor text differs slightly.
  *
  * Note: when a transaction's date has been moved via the UI, originalTxnDate is used
@@ -98,13 +118,11 @@ export function detectDuplicates(incoming: Omit<Transaction, 'id'>[]): Duplicate
     if (txn.source !== 'bank_csv' || !txn.instrument) return false;
     const txnMs = dateToMs(txn.txnDate);
     const txnInst = normalizeInstrument(txn.instrument ?? '');
-    const txnDesc = normalize(txn.descriptor);
     const idx = remainingCardEntries.findIndex((e) => {
       if (e.amount !== txn.amount) return false;
       if (e.instrument !== txnInst) return false;
       if (Math.abs(e.dateMs - txnMs) > 5 * DAY_MS) return false;
-      const minLen = Math.min(txnDesc.length, e.desc.length);
-      return minLen >= 6 && txnDesc.slice(0, 6) === e.desc.slice(0, 6);
+      return sameMerchant(txn.descriptor, e.desc);
     });
     if (idx < 0) return false;
     remainingCardEntries.splice(idx, 1);
@@ -148,4 +166,58 @@ export function detectDuplicates(incoming: Omit<Transaction, 'id'>[]): Duplicate
   }
 
   return { duplicates, unique };
+}
+
+export interface DuplicateGroup {
+  /** The copy to keep: categorized/split/annotated first, then the earliest import. */
+  keep: Transaction;
+  /** The other copies, proposed for deletion. */
+  extras: Transaction[];
+  /** All copies share the exact same descriptor, which can also mean genuine repeat purchases. */
+  identical: boolean;
+}
+
+/**
+ * Find bank-CSV transactions already in the data that look like the same charge recorded twice:
+ * same card, same bank date, same amount, and the same merchant (see sameMerchant).
+ */
+export function findExistingDuplicates(data: Pick<AppData, 'transactions' | 'transactionSplits'>): DuplicateGroup[] {
+  const hasSplits = new Set(data.transactionSplits.map((s) => s.transactionId));
+  const keepScore = (t: Transaction) =>
+    (t.categoryId != null || hasSplits.has(t.id) ? 8 : 0)
+    + (t.comment ? 4 : 0)
+    + (t.starred || t.starNote ? 2 : 0)
+    + (t.isTransfer ? 1 : 0);
+
+  const buckets = new Map<string, Transaction[]>();
+  for (const t of data.transactions) {
+    if (t.source !== 'bank_csv' || !t.instrument) continue;
+    const key = `${normalizeInstrument(t.instrument)}|${t.originalTxnDate ?? t.txnDate}|${t.amount}`;
+    const arr = buckets.get(key);
+    if (arr) arr.push(t); else buckets.set(key, [t]);
+  }
+
+  const groups: DuplicateGroup[] = [];
+  for (const bucket of buckets.values()) {
+    if (bucket.length < 2) continue;
+    // Cluster the bucket by merchant; each cluster of 2+ is one duplicate group.
+    const remaining = [...bucket].sort((a, b) => a.id - b.id);
+    while (remaining.length > 0) {
+      const first = remaining.shift()!;
+      const cluster = [first];
+      for (let i = remaining.length - 1; i >= 0; i--) {
+        const other = remaining[i];
+        // sourceRef is the CSV filename. One statement never lists the same posted charge twice, so
+        // rows from the same file are separate purchases (two RESP deposits, two phone lines, ...).
+        if (other.sourceRef && cluster.some((c) => c.sourceRef === other.sourceRef)) continue;
+        if (sameMerchant(first.descriptor, other.descriptor)) cluster.push(...remaining.splice(i, 1));
+      }
+      if (cluster.length < 2) continue;
+      cluster.sort((a, b) => keepScore(b) - keepScore(a) || a.id - b.id);
+      const [keep, ...extras] = cluster;
+      const identical = cluster.every((t) => normalize(t.descriptor) === normalize(keep.descriptor));
+      groups.push({ keep, extras, identical });
+    }
+  }
+  return groups.sort((a, b) => (b.keep.txnDate > a.keep.txnDate ? 1 : b.keep.txnDate < a.keep.txnDate ? -1 : 0));
 }

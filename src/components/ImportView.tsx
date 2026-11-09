@@ -61,12 +61,17 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
   const [paypalUnmatched, setPaypalUnmatched] = useState<Transaction[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
+  const csvImporting = useRef(false);
   const importTypeRef = useRef(importType);
   useEffect(() => { importTypeRef.current = importType; }, [importType]);
 
   useEffect(() => {
+    // The listener registers asynchronously. If the view unmounts first (StrictMode remount, quick
+    // tab switch), unregister as soon as it arrives — otherwise it leaks and a later drop imports twice.
+    let disposed = false;
     let cleanup: (() => void) | null = null;
     getCurrentWebview().onDragDropEvent((event) => {
+      if (disposed) return;
       const { type } = event.payload;
       if (type === 'enter' || type === 'over') {
         setDragOver(true);
@@ -81,8 +86,8 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
           .then((text) => handleCsvImport(undefined, text))
           .catch((e) => setError(String(e)));
       }
-    }).then((fn) => { cleanup = fn; });
-    return () => { cleanup?.(); };
+    }).then((fn) => { if (disposed) fn(); else cleanup = fn; });
+    return () => { disposed = true; cleanup?.(); };
   }, []);
 
   function reset() {
@@ -218,6 +223,9 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
   }
 
   async function handleCsvImport(fileArg?: File, textArg?: string) {
+    // Two imports checking duplicates against the same data before either inserts would both insert.
+    if (csvImporting.current) return;
+    csvImporting.current = true;
     reset();
     setBusy(true);
     try {
@@ -256,6 +264,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
       setError(String(e));
     } finally {
       setBusy(false);
+      csvImporting.current = false;
     }
   }
 
