@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.13.0](https://github.com/Kll7Ordin/kestl/compare/v2.12.0...v2.13.0) (2026-11-10)
+
+
+### Features
+
+* **budget:** per-category option to exclude from off-budget spending total ([500d032](https://github.com/Kll7Ordin/kestl/commit/500d03250af1f489704e296e55bb32ce6544876d))
+
+
+### Bug Fixes
+
+* **budget:** correct month names in copy-from list and hide already-budgeted categories in add menu ([56479c1](https://github.com/Kll7Ordin/kestl/commit/56479c1dde19424b5e5e4113d444bb8ef939801d))
+
 ## [2.12.0](https://github.com/Kll7Ordin/kestl/compare/v2.11.0...v2.12.0) (2026-11-10)
 
 
