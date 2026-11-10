@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.11.0](https://github.com/Kll7Ordin/kestl/compare/v2.10.0...v2.11.0) (2026-11-10)
+
+
+### Features
+
+* **suggestions:** step-by-step ? lookup and "why" details for suggestion chips ([2e01419](https://github.com/Kll7Ordin/kestl/commit/2e01419e5b39bb04b3e553ba47f74575e0d21fc5))
+
 ## [2.10.0](https://github.com/Kll7Ordin/kestl/compare/v2.9.0...v2.10.0) (2026-11-10)
 
 
