@@ -59,7 +59,8 @@ src/
 │   ├── SavingsView.tsx          # Savings buckets and entry log
 │   ├── YearView.tsx             # Year-to-date summary across months
 │   ├── AIPanel.tsx              # Chat interface to the local Ollama assistant
-│   ├── TransactionLookup.tsx    # Single-merchant lookup: web search + LLM identification
+│   ├── TransactionLookup.tsx    # ? window: step-by-step lookup, recommends only (never sets a category itself)
+│   ├── SuggestionDetails.tsx    # ⓘ window: why the suggestion chip guessed (or didn't); no AI
 │   ├── ParserGenerator.tsx      # LLM-powered builder for custom CSV parsers
 │   ├── SplitEditor.tsx          # UI for splitting a transaction across categories
 │   ├── MortgageTool.tsx         # Mortgage balance tracking and amortization
@@ -76,7 +77,8 @@ src/
 │   ├── duplicates.ts            # Count-based duplicate detection for incoming CSV rows
 │   ├── matching.ts              # PayPal-to-bank-debit linking
 │   ├── refunds.ts               # Refund candidate detection and month-date adjustment
-│   ├── llm.ts                   # Ollama API calls: chat, lookupTransaction, generateParser
+│   ├── llm.ts                   # Ollama API calls: chat, ollamaJson, searchWeb, generateParser
+│   ├── lookup.ts                # ? lookup pipeline: history → AI query → search → AI reading → AI category
 │   ├── recurring.ts             # Generates transactions from RecurringTemplate records
 │   ├── savings.ts               # Savings balance calculations
 │   └── dateUtils.ts             # Date arithmetic helpers
@@ -201,7 +203,8 @@ See the `kestl-extension-points` skill.
 | Apply a rule retroactively to history | `runRuleOnHistory()` — `logic/categorize.ts:259` |
 | History-based suggestions (merchant parsing, weighted vote) | `parseDescriptor()` / `buildSuggester()` — `logic/suggest.ts` |
 | AI merchant labels (kind of business, saved in `AppData.merchantTypes`) | `classifyMerchants()` — `logic/aiSuggest.ts` |
-| LLM + web search (single merchant) | `lookupTransaction()` — `logic/llm.ts:489` |
+| Why the chip did/didn't guess (trace + notes) | `buildSuggester().explain()` — `logic/suggest.ts` |
+| `?` lookup (AI query, web search, AI reading, AI category; saved per merchant in `AppData.merchantLookups`) | `runLookup()` — `logic/lookup.ts` |
 | Bulk categorize by pattern (no rule saved) | `bulkCategorizeByDescriptor()` — `logic/categorize.ts:215` |
 | Create rule + apply immediately | `createRuleAndApply()` — `logic/categorize.ts:290` |
 

@@ -81,7 +81,9 @@ flowchart LR
 | `customParsers` | `{ id, name, instrument, code, sampleLines, createdAt }[]` | ParserGenerator / SettingsView |
 | `amazonOrders` | `{ orderNum, itemName, orderDate, amount, status }[]` | ImportView (Amazon path) |
 | `aiSettings` | `{ ollamaUrl, model }` | SettingsView |
-| `aiCategoryFeedback` | `{ descriptor, suggestedCategoryId, acceptedCategoryId, outcome }[]` | ImportView (on suggestion accept/reject) |
+| `aiCategoryFeedback` | `{ descriptor, suggestedCategoryId, acceptedCategoryId, outcome, source?, at? }[]` | TransactionView / TransactionLookup (`logSuggestionOutcome`, when a row with a suggestion is categorized) |
+| `merchantTypes` | `Record<merchantKey, type>` | TransactionView (AI: label merchants), TransactionLookup |
+| `merchantLookups` | `Record<merchantKey, LookupReport>` | TransactionLookup (`saveMerchantLookup`) |
 | `experimentalBudgets` | `{ id, name, createdAt, items[] }[]` | ExperimentalBudgetsView |
 | `mortgage` / `mortgageLedger` | config + ledger entries | MortgageTool |
 | `nextId` | `number` | Auto-incremented by `nextId()` inside db.ts on every entity creation |

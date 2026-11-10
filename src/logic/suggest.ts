@@ -10,6 +10,7 @@
  * A suggestion is made only when one category clearly wins and there is enough evidence behind it.
  */
 import type { Transaction } from '../db';
+import { isCredit } from './txnKind';
 
 // ── Merchant extraction ───────────────────────────────────────────────────────
 
@@ -147,10 +148,74 @@ export interface CategoryGuess {
   scores: Map<number, number>;
   /** The strongest piece of evidence, e.g. `same merchant ×4` or `like other restaurants`. */
   reason: string;
+  /** Which evidence decided it: similar merchant names, or how this kind of business is usually filed. */
+  tier: 'name' | 'type';
+}
+
+/** One past merchant that counted towards a suggestion. */
+export interface MatchEvidence {
+  /** Merchant key of the past purchases. */
+  merchant: string;
+  /** How it matched: `same merchant`, `similar name`, `same first word`, `shared words`, `same product`. */
+  kind: string;
+  /** 0–1. */
+  similarity: number;
+  purchases: number;
+  categories: { categoryId: number; count: number }[];
+  /** Newest purchase, YYYY-MM-DD ('' if unknown). */
+  lastDate: string;
+  /** Purchases for exactly this amount (only counted for close matches, where amount matters). */
+  sameAmount: number;
+}
+
+export interface CategoryShare {
+  categoryId: number;
+  weight: number;
+  /** 0–1 share of the total. */
+  share: number;
+}
+
+export type MerchantTypeStatus = 'labelled' | 'unknown' | 'vague' | 'unlabelled' | 'not applicable';
+
+/** Everything the suggester looked at for one transaction, including why it made no guess. */
+export interface SuggestTrace {
+  /** Merchant name as extracted from the descriptor ('' if none). */
+  merchant: string;
+  /** A marketplace product title rather than a merchant. */
+  product: boolean;
+  /** A bank transfer/payment with no merchant name. */
+  bankTransfer: boolean;
+  merchantType: string | null;
+  merchantTypeStatus: MerchantTypeStatus;
+  /** Past merchants that matched, strongest first (at most 8). */
+  matches: MatchEvidence[];
+  /** Weighted vote from matching merchant names. */
+  nameScores: CategoryShare[];
+  /** How past merchants of the same kind were filed (empty without a usable type). */
+  typeScores: CategoryShare[];
+  /** Other merchants of the same kind with categorized purchases. */
+  typePeers: number;
+  guess: CategoryGuess | null;
+  /** Plain-language steps: what was found, and why a guess was or wasn't made. */
+  notes: string[];
 }
 
 /** Types too vague to learn from. */
 const VAGUE_TYPES = new Set(['unknown', 'other', 'department store', 'bank or financial']);
+
+const MIN_TYPE_PEERS = 3;
+const MIN_TYPE_SHARE = 0.65;
+const MIN_TYPE_EVIDENCE = 2;
+
+function toShares(scores: Map<number, number>): CategoryShare[] {
+  let total = 0;
+  for (const s of scores.values()) total += s;
+  return [...scores.entries()]
+    .map(([categoryId, weight]) => ({ categoryId, weight, share: total > 0 ? weight / total : 0 }))
+    .sort((a, b) => b.weight - a.weight);
+}
+
+const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 /**
  * Build a reusable suggester over a corpus of categorized transactions. Use `corpusFilter` upstream to
@@ -244,11 +309,9 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
   const inter = new Uint16Array(merchants.length);
   const seen = new Uint8Array(merchants.length);
 
-  function scoreFor(descriptor: string, amount: number, refMs: number): CategoryGuess | null {
-    const q = parseDescriptor(descriptor);
-    if (!q.key) return null;
+  /** Name-matching tier. With `trace`, also records every match and the vote. */
+  function byName(q: ParsedDescriptor, amount: number, refMs: number, trace?: SuggestTrace): { scores: Map<number, number>; best: { sim: number; kind: string; n: number } } {
     const qTri = trigrams(q.compact);
-
     const touched: number[] = [];
     const touch = (i: number) => { if (!seen[i]) { seen[i] = 1; touched.push(i); } };
     for (const g of qTri) for (const i of byTri.get(g) ?? []) { inter[i]++; touch(i); }
@@ -265,67 +328,179 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
       // Within one merchant, each row votes; the vote total for a merchant is damped (sqrt) so a
       // merchant seen 40 times doesn't drown out a closer match seen twice.
       const raw = new Map<number, number>();
+      let sameAmount = 0;
       for (const r of m.rows) {
         const ageDays = Math.max(0, (refMs - r.dateMs) / DAY_MS);
         const recency = 0.25 + 0.75 * Math.pow(0.5, ageDays / 240);
         let amt = 1;
         if (sim >= 0.85) {
           const diff = Math.abs(r.amount - amount);
-          if (diff < 0.01) amt = 4;
+          if (diff < 0.01) { amt = 4; sameAmount++; }
           else if (diff <= Math.max(1, Math.abs(amount) * 0.05)) amt = 1.6;
         }
         raw.set(r.categoryId, (raw.get(r.categoryId) ?? 0) + recency * amt);
       }
       const damp = Math.max(Math.sqrt(m.rows.length) / m.rows.length, 0.15);
       for (const [cat, w] of raw) scores.set(cat, (scores.get(cat) ?? 0) + sim * w * damp);
+      if (trace) {
+        const counts = new Map<number, number>();
+        for (const r of m.rows) counts.set(r.categoryId, (counts.get(r.categoryId) ?? 0) + 1);
+        const last = Math.max(...m.rows.map((r) => r.dateMs));
+        trace.matches.push({
+          merchant: m.parsed.key,
+          kind,
+          similarity: sim,
+          purchases: m.rows.length,
+          categories: [...counts.entries()].map(([categoryId, count]) => ({ categoryId, count })).sort((a, b) => b.count - a.count),
+          lastDate: last > 0 ? new Date(last).toISOString().slice(0, 10) : '',
+          sameAmount,
+        });
+      }
     }
-
-    const pick = (sc: Map<number, number>, share: number, evidence: number) => {
-      let total = 0, topCat = -1, top = 0;
-      for (const [cat, s] of sc) { total += s; if (s > top) { top = s; topCat = cat; } }
-      return total > 0 && top / total >= share && top >= evidence ? { topCat, confidence: top / total } : null;
-    };
-    const byName = pick(scores, minShare, minEvidence);
-    if (byName) {
-      return { categoryId: byName.topCat, confidence: byName.confidence, scores, reason: best.kind ? `${best.kind}${best.n > 1 ? ` ×${best.n}` : ''}` : '' };
-    }
-    return byKindOfBusiness(q, refMs);
+    return { scores, best };
   }
 
   /**
-   * Fallback: how this household files other merchants of the same kind. Each merchant gets one
-   * (recency-weighted) vote split across its categories, so one busy store doesn't decide for its type.
+   * How this household files merchants of one kind. Each merchant gets one (recency-weighted) vote
+   * split across its categories, so one busy store doesn't decide for its type.
    */
-  function byKindOfBusiness(q: ParsedDescriptor, refMs: number): CategoryGuess | null {
-    const type = types[q.key];
-    const peers = type ? byType.get(type) : undefined;
-    if (!peers || peers.length < 3) return null;
+  function typeVote(type: string, excludeKey: string, refMs: number): { peers: number; scores: Map<number, number> } {
     const scores = new Map<number, number>();
-    let total = 0;
-    for (const m of peers) {
-      if (m.parsed.key === q.key) continue;
+    let peers = 0;
+    for (const m of byType.get(type) ?? []) {
+      if (m.parsed.key === excludeKey) continue;
+      peers++;
       const latest = Math.max(...m.rows.map((r) => r.dateMs));
       const recency = 0.4 + 0.6 * Math.pow(0.5, Math.max(0, (refMs - latest) / DAY_MS) / 365);
       const perCat = new Map<number, number>();
       for (const r of m.rows) perCat.set(r.categoryId, (perCat.get(r.categoryId) ?? 0) + 1);
-      for (const [cat, n] of perCat) {
-        const w = recency * n / m.rows.length;
-        scores.set(cat, (scores.get(cat) ?? 0) + w);
-        total += w;
-      }
+      for (const [cat, n] of perCat) scores.set(cat, (scores.get(cat) ?? 0) + recency * n / m.rows.length);
     }
-    let topCat = -1, top = 0;
-    for (const [cat, s] of scores) if (s > top) { top = s; topCat = cat; }
-    // Stricter than name matches: the same kind of business is weaker evidence than the same merchant.
-    if (total <= 0 || top / total < Math.max(minShare, 0.65) || top < 2) return null;
-    return { categoryId: topCat, confidence: top / total, scores, reason: `like other ${type} merchants` };
+    return { peers, scores };
   }
+
+  function top(sc: Map<number, number>): { topCat: number; top: number; total: number } {
+    let total = 0, topCat = -1, best = 0;
+    for (const [cat, s] of sc) { total += s; if (s > best) { best = s; topCat = cat; } }
+    return { topCat, top: best, total };
+  }
+
+  function run(descriptor: string, amount: number, refMs: number, trace?: SuggestTrace, name: (id: number) => string = (id) => `#${id}`): CategoryGuess | null {
+    const q = parseDescriptor(descriptor);
+    const note = (s: string) => { trace?.notes.push(s); };
+    if (trace) {
+      trace.merchant = q.key;
+      trace.product = q.product;
+      trace.bankTransfer = isBankTransferDescriptor(descriptor);
+    }
+    if (!q.key) {
+      note('No merchant name could be read from the descriptor, so there is nothing to compare.');
+      return null;
+    }
+
+    // Tier 1: similar merchant names.
+    const { scores, best } = byName(q, amount, refMs, trace);
+    if (trace) {
+      trace.matches.sort((a, b) => b.similarity - a.similarity || b.purchases - a.purchases);
+      trace.matches = trace.matches.slice(0, 8);
+      trace.nameScores = toShares(scores);
+    }
+    let guess: CategoryGuess | null = null;
+    const n = top(scores);
+    if (n.total <= 0) {
+      note(q.product ? 'No past product shares enough words with this one.' : 'No past purchase has a similar merchant name.');
+    } else if (n.top / n.total < minShare) {
+      note(`From similar names: ${name(n.topCat)} leads with ${pct(n.top / n.total)} of the weighted vote, but a guess needs ${pct(minShare)}.`);
+    } else if (n.top < minEvidence) {
+      note(`From similar names: ${name(n.topCat)} leads, but the matches are too weak to rely on (score ${n.top.toFixed(2)}, needs ${minEvidence}).`);
+    } else {
+      const reason = best.kind ? `${best.kind}${best.n > 1 ? ` ×${best.n}` : ''}` : '';
+      guess = { categoryId: n.topCat, confidence: n.top / n.total, scores, reason, tier: 'name' };
+      note(`Guess ${name(n.topCat)} (${pct(guess.confidence)}) from ${reason || 'similar names'}.`);
+    }
+
+    // Tier 2: how this kind of business is usually filed. Evaluated for the trace even when tier 1
+    // already decided, so the details show both.
+    if (guess && !trace) return guess;
+    const type = types[q.key];
+    let status: MerchantTypeStatus;
+    if (trace?.bankTransfer) status = 'not applicable';
+    else if (type === undefined) status = 'unlabelled';
+    else if (type === 'unknown') status = 'unknown';
+    else if (VAGUE_TYPES.has(type)) status = 'vague';
+    else status = 'labelled';
+    if (trace) {
+      trace.merchantType = type ?? null;
+      trace.merchantTypeStatus = status;
+    }
+    const prefix = guess ? 'Kind of business (not needed): ' : 'Kind of business: ';
+    if (status === 'not applicable') { note(`${prefix}a bank transfer names no merchant, so the kind of business can't help.`); return guess; }
+    if (status === 'unlabelled') { note(`${prefix}not labelled yet. A ? lookup or "AI: label merchants" can add it.`); return guess; }
+    if (status === 'unknown') { note(`${prefix}the AI couldn't tell what kind of business this is.`); return guess; }
+    if (status === 'vague') { note(`${prefix}"${type}" is too broad to learn from.`); return guess; }
+
+    const tv = typeVote(type!, q.key, refMs);
+    const t = top(tv.scores);
+    if (trace) { trace.typeScores = toShares(tv.scores); trace.typePeers = tv.peers; }
+    if (tv.peers < MIN_TYPE_PEERS) {
+      note(`${prefix}${type}, but only ${tv.peers} other ${type} merchant${tv.peers === 1 ? ' has' : 's have'} categorized purchases (needs ${MIN_TYPE_PEERS}).`);
+      return guess;
+    }
+    const typeShare = Math.max(minShare, MIN_TYPE_SHARE);
+    if (t.total <= 0 || t.top / t.total < typeShare) {
+      const split = toShares(tv.scores).slice(0, 3).map((s) => `${name(s.categoryId)} ${pct(s.share)}`).join(', ');
+      note(`${prefix}${type}, but your ${type} merchants are split (${split}); a guess needs ${pct(typeShare)}.`);
+      return guess;
+    }
+    if (t.top < MIN_TYPE_EVIDENCE) {
+      note(`${prefix}${type}, but there isn't enough ${type} history to rely on yet.`);
+      return guess;
+    }
+    if (guess) {
+      note(`${prefix}${type} merchants mostly go to ${name(t.topCat)} (${pct(t.top / t.total)}).`);
+      return guess;
+    }
+    guess = { categoryId: t.topCat, confidence: t.top / t.total, scores: tv.scores, reason: `like other ${type} merchants`, tier: 'type' };
+    note(`Guess ${name(t.topCat)} (${pct(guess.confidence)}) from how you file other ${type} merchants.`);
+    return guess;
+  }
+
+  const refFor = (asOf?: string) => (asOf ? Date.parse(asOf) || latestMs : latestMs);
 
   return {
     /** Best guess for one descriptor/amount, or null when not confident. `asOf` defaults to the newest corpus date. */
     suggest(descriptor: string, amount: number, asOf?: string): CategoryGuess | null {
-      const refMs = asOf ? Date.parse(asOf) || latestMs : latestMs;
-      return scoreFor(descriptor, amount, refMs);
+      return run(descriptor, amount, refFor(asOf));
+    },
+    /**
+     * The same decision as `suggest`, with everything it looked at and plain-language notes on why it
+     * did or didn't guess. `categoryName` turns ids into names for the notes.
+     */
+    explain(descriptor: string, amount: number, opts: { asOf?: string; categoryName?: (id: number) => string } = {}): SuggestTrace {
+      const trace: SuggestTrace = {
+        merchant: '', product: false, bankTransfer: false, merchantType: null, merchantTypeStatus: 'unlabelled',
+        matches: [], nameScores: [], typeScores: [], typePeers: 0, guess: null, notes: [],
+      };
+      trace.guess = run(descriptor, amount, refFor(opts.asOf), trace, opts.categoryName);
+      return trace;
+    },
+    /** How merchants of one kind are filed (for the AI lookup's category step). */
+    typeProfile(type: string, excludeMerchant = ''): { peers: number; shares: CategoryShare[] } {
+      const tv = typeVote(type, excludeMerchant, latestMs);
+      return { peers: tv.peers, shares: toShares(tv.scores) };
     },
   };
+}
+
+export type Suggester = ReturnType<typeof buildSuggester>;
+
+/**
+ * Past purchases the suggester learns from: categorized, live (not archived) categories, no credits
+ * or transfers. Shared by the suggestion chips and the ? lookup so both see the same history.
+ */
+export function suggestionCorpus<T extends Pick<Transaction, 'categoryId' | 'isTransfer' | 'ignoreInBudget'>>(
+  transactions: T[],
+  liveCategoryIds: Set<number>,
+): T[] {
+  return transactions.filter((t) => t.categoryId != null && liveCategoryIds.has(t.categoryId) && !isCredit(t) && !t.isTransfer);
 }

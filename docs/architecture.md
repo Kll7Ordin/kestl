@@ -4,7 +4,7 @@ Kestl is a privacy-focused desktop budgeting app built on **Tauri 2** (Rust shel
 
 The frontend is split into three layers that sit above a central state module. **`src/db.ts`** is the entire in-memory store and persistence engine — it holds a module-level `AppData` object, exposes typed mutator functions (`addTransaction`, `updateCategory`, …), and calls `persist()` after every change (refresh references and notify the UI immediately; a debounced background save then serializes → optionally encrypts with a cached session key → `invoke('save_data')`). UI components subscribe via React's `useSyncExternalStore`. The **logic layer** (`src/logic/`) contains stateless algorithms — duplicate detection, rule matching, scoring, PayPal linking, refund detection — that read from `db.getData()` but never persist directly. The **parsers layer** (`src/parsers/`) converts raw text from bank exports into `Transaction` arrays that the import pipeline feeds into db.ts.
 
-AI features are optional and fully local. When Ollama is running, `src/logic/llm.ts` makes HTTP calls to `localhost:11434` for parser generation (`generateParser`), single-transaction identification (`lookupTransaction`), and structured budget questions (`answerStructuredQuestion`). All three paths are opt-in; the app is fully usable without Ollama.
+AI features are optional and fully local. When Ollama is running, `src/logic/llm.ts` makes HTTP calls to `localhost:11434` for parser generation (`generateParser`), single-transaction identification (`runLookup` in `logic/lookup.ts`), and structured budget questions (`answerStructuredQuestion`). All three paths are opt-in; the app is fully usable without Ollama.
 
 ## Subsystem diagram
 

@@ -10,16 +10,18 @@ import {
   withUndo,
   getAISettings,
   addMerchantTypes,
+  logSuggestionOutcome,
   type Transaction,
 } from '../db';
 import { getSplitsIndex, isCategorized as txnIsCategorized } from '../logic/spend';
 import { bulkCategorizeByDescriptor, bulkApplySplitRule, bulkMarkTransferByDescriptor } from '../logic/categorize';
-import { buildSuggester, parseDescriptor, type CategoryGuess } from '../logic/suggest';
+import { buildSuggester, parseDescriptor, suggestionCorpus, type CategoryGuess } from '../logic/suggest';
 import { classifyMerchants, needsMerchantType } from '../logic/aiSuggest';
 import { findRefundCandidates, applyRefundToOriginalMonth, type RefundCandidate } from '../logic/refunds';
 import { SplitEditor } from './SplitEditor';
 import { SearchableSelect } from './SearchableSelect';
 import { TransactionLookup } from './TransactionLookup';
+import { SuggestionDetails } from './SuggestionDetails';
 import { formatAmount } from '../utils/format';
 import { isCredit } from '../logic/txnKind';
 import { TxnRow, DescriptorTooltip, type DescriptorTooltipHandle, type TxnRowActions } from './TransactionRow';
@@ -37,6 +39,13 @@ function currentMonth(): string {
  */
 function txnRowSignature(t: Transaction): string {
   return `${t.txnDate}|${t.amount}|${t.categoryId}|${t.linkedTransactionId}|${t.ignoreInBudget ? 1 : 0}|${t.isTransfer ? 1 : 0}|${t.starred ? 1 : 0}|${t.starNote ? 1 : 0}|${t.comment ? 1 : 0}|${t.instrument}|${t.descriptor}`;
+}
+
+/** What's on offer for an uncategorized row. The chip shows the history guess, else the ? lookup's. */
+interface RowSuggestion {
+  history: CategoryGuess | null;
+  /** Category recommended by a saved ? lookup for this merchant. */
+  ai: { categoryId: number; at: string; confidence?: string; reason?: string } | null;
 }
 
 function useAppData() {
@@ -91,6 +100,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [moveMonthYear, setMoveMonthYear] = useState('');
   const [moveMonthNum, setMoveMonthNum] = useState('');
   const [lookupTxn, setLookupTxn] = useState<Transaction | null>(null);
+  const [explainTxn, setExplainTxn] = useState<Transaction | null>(null);
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [exportStatus, setExportStatus] = useState<string | null>(null);
@@ -111,6 +121,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     openMoveMonth,
     editComment: startEditComment,
     lookup: (t) => { onNeedOllama?.(); setLookupTxn(t); },
+    explain: setExplainTxn,
     confirmDelete: setConfirmDeleteId,
     showTooltip: (cell) => tooltipRef.current?.show(cell),
     hideTooltip: () => tooltipRef.current?.hide(),
@@ -208,18 +219,24 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const suggestTxns = useDeferredValue(allTransactions);
   const suggestSplits = useDeferredValue(splitsMap);
   const merchantTypes = useDeferredValue(appData.merchantTypes);
-  const allSuggestions = useMemo(() => {
+  const merchantLookups = useDeferredValue(appData.merchantLookups);
+  const { suggester, allSuggestions } = useMemo(() => {
     const live = new Set(categories.filter((c) => !c.archived).map((c) => c.id));
-    const corpus = suggestTxns.filter((t) => t.categoryId != null && live.has(t.categoryId) && !isCredit(t) && !t.isTransfer);
-    const suggester = buildSuggester(corpus, { merchantTypes });
-    const suggestions = new Map<number, CategoryGuess>();
+    const suggester = buildSuggester(suggestionCorpus(suggestTxns, live), { merchantTypes });
+    const suggestions = new Map<number, RowSuggestion>();
     for (const t of suggestTxns) {
       if (t.categoryId != null || isCredit(t) || t.isTransfer || suggestSplits.has(t.id)) continue;
       const g = suggester.suggest(t.descriptor, t.amount);
-      if (g && live.has(g.categoryId)) suggestions.set(t.id, g);
+      const history = g && live.has(g.categoryId) ? g : null;
+      const lk = merchantLookups?.[parseDescriptor(t.descriptor).key];
+      const aiCat = lk?.category.categoryId;
+      const ai = lk && aiCat != null && live.has(aiCat)
+        ? { categoryId: aiCat, at: lk.at, confidence: lk.category.confidence, reason: lk.category.reason }
+        : null;
+      if (history || ai) suggestions.set(t.id, { history, ai });
     }
-    return suggestions;
-  }, [suggestTxns, categories, suggestSplits, merchantTypes]);
+    return { suggester, allSuggestions: suggestions };
+  }, [suggestTxns, categories, suggestSplits, merchantTypes, merchantLookups]);
 
   // Merchants the local model hasn't labelled yet (only offered when AI features are on).
   const unlabelledCount = useMemo(() => {
@@ -267,14 +284,23 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
 
   const win = useWindowedRows(txns.length, tbodyRef);
 
-  function suggestionTitleFor(g: CategoryGuess): string {
+  function suggestionTitleFor(s: RowSuggestion): string {
+    const g = s.history;
+    if (!g) {
+      const ai = s.ai!;
+      return `Recommended by the ? lookup on ${ai.at.slice(0, 10)}${ai.confidence ? ` (${ai.confidence} confidence)` : ''} — click to use it\n`
+        + (ai.reason ? `${ai.reason}\n` : '')
+        + 'ⓘ shows why';
+    }
     const total = [...g.scores.values()].reduce((a, b) => a + b, 0) || 1;
-    return `Suggested from your history (${g.reason}) — click to accept\n`
+    return `Suggested from your history (${g.reason}) — click to use it\n`
       + [...g.scores.entries()]
         .sort((x, y) => y[1] - x[1])
         .slice(0, 5)
         .map(([catId, w]) => `${catMap.get(catId) ?? catId}: ${Math.round((100 * w) / total)}%`)
-        .join('\n');
+        .join('\n')
+      + (s.ai && s.ai.categoryId !== g.categoryId ? `\nThe ? lookup recommended ${catMap.get(s.ai.categoryId)} instead` : '')
+      + '\nⓘ shows why';
   }
 
   async function exportDisplayed() {
@@ -304,7 +330,16 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   );
 
   async function assignCategory(txnId: number, categoryId: number | null) {
+    const t = allTransactions.find((x) => x.id === txnId);
+    const offer = allSuggestions.get(txnId);
     await updateTransaction(txnId, { categoryId });
+    // Track how often each suggestion turns out right (Settings shows the tally).
+    if (t && t.categoryId == null && categoryId != null && offer) {
+      const offered: { source: 'history' | 'ai'; categoryId: number }[] = [];
+      if (offer.history) offered.push({ source: 'history', categoryId: offer.history.categoryId });
+      if (offer.ai) offered.push({ source: 'ai', categoryId: offer.ai.categoryId });
+      await logSuggestionOutcome(t.descriptor, categoryId, offered);
+    }
   }
 
   function openRuleModal(txn: Transaction) {
@@ -711,6 +746,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
             )}
             {txns.slice(win.start, win.end).map((t, i) => {
               const suggestion = t.categoryId == null ? allSuggestions.get(t.id) : undefined;
+              const chipCat = suggestion ? (suggestion.history?.categoryId ?? suggestion.ai?.categoryId) : undefined;
               return (
                 <TxnRow
                   key={t.id}
@@ -719,9 +755,10 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                   rowClass={rowClasses[win.start + i]}
                   splits={splitsMap.get(t.id)}
                   isEditingCategory={editingCategoryId === t.id}
-                  suggestionCatId={suggestion?.categoryId}
-                  suggestionName={suggestion ? catMap.get(suggestion.categoryId) : undefined}
+                  suggestionCatId={chipCat}
+                  suggestionName={chipCat != null ? catMap.get(chipCat) : undefined}
                   suggestionTitle={suggestion ? suggestionTitleFor(suggestion) : undefined}
+                  suggestionFromAi={suggestion != null && suggestion.history == null}
                   catMap={catMap}
                   catColorMap={catColorMap}
                   categoryOptions={categoryOptions}
@@ -1058,7 +1095,22 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       {lookupTxn && (
         <TransactionLookup
           transaction={lookupTxn}
+          suggester={suggester}
           onClose={() => setLookupTxn(null)}
+        />
+      )}
+
+      {explainTxn && (
+        <SuggestionDetails
+          transaction={allTransactions.find((x) => x.id === explainTxn.id) ?? explainTxn}
+          trace={suggester.explain(explainTxn.descriptor, explainTxn.amount, { categoryName: (id) => catMap.get(id) ?? `#${id}` })}
+          lookup={appData.merchantLookups?.[parseDescriptor(explainTxn.descriptor).key]}
+          aiLookupEnabled={!!txnAiLookupEnabled}
+          catMap={catMap}
+          catColorMap={catColorMap}
+          onUse={(catId) => { void assignCategory(explainTxn.id, catId); setExplainTxn(null); }}
+          onRunLookup={() => { const t = explainTxn; setExplainTxn(null); onNeedOllama?.(); setLookupTxn(t); }}
+          onClose={() => setExplainTxn(null)}
         />
       )}
 

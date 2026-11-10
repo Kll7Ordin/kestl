@@ -490,173 +490,35 @@ export async function sendChat(
   return { assistantText: fallback, newHistory };
 }
 
-export interface LookupResult {
-  categoryId: number | null;
-  categoryName: string | null;
-  info: string;
+/** One structured call to the local model: the reply is constrained to `schema` and parsed. */
+export async function ollamaJson(settings: AISettings, system: string, user: string, schema: object): Promise<unknown> {
+  const resp = await ollamaFetch(`${settings.ollamaUrl}/api/chat`, CHAT_TIMEOUT_MS, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: settings.model,
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      stream: false,
+      format: schema,
+      options: { temperature: 0, num_ctx: 8192 },
+    }),
+  });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    throw new Error(`Ollama returned ${resp.status}${text ? `: ${text.slice(0, 120)}` : ''}`);
+  }
+  const body = await resp.json();
+  const content: string = body.message?.content ?? '';
+  try {
+    return JSON.parse(content);
+  } catch {
+    throw new Error('the model replied with something other than JSON');
+  }
 }
 
-/**
- * Single-shot lookup: identify a transaction using past history + web search.
- * Returns a structured result with a specific category suggestion + merchant info.
- */
-export async function lookupTransaction(
-  descriptor: string,
-  amount: number,
-  date: string,
-  instrument: string,
-  settings: AISettings,
-  onToolStatus: (status: string) => void,
-): Promise<LookupResult> {
-  const data = getData();
-  const catMap = new Map(data.categories.map((c) => [c.id, c.name]));
-
-  // Fuzzy history match — same algorithm as TransactionView chips
-  function normDesc(d: string): string {
-    return d.toLowerCase().replace(/\d{4,}/g, '').replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim().split(' ').slice(0, 5).join(' ');
-  }
-  const descNorm = normDesc(descriptor);
-  const descWords = descNorm.split(' ').filter((w) => w.length >= 4);
-
-  // Build frequency maps from all categorized transactions
-  const descFreq = new Map<string, Map<number, number>>();
-  const wordFreq = new Map<string, Map<number, number>>();
-  for (const t of data.transactions) {
-    if (t.categoryId == null || isCredit(t)) continue;
-    const key = normDesc(t.descriptor);
-    if (!key) continue;
-    if (!descFreq.has(key)) descFreq.set(key, new Map());
-    const dm = descFreq.get(key)!;
-    dm.set(t.categoryId, (dm.get(t.categoryId) ?? 0) + 1);
-    for (const w of key.split(' ').filter((w) => w.length >= 4)) {
-      if (!wordFreq.has(w)) wordFreq.set(w, new Map());
-      const wm = wordFreq.get(w)!;
-      wm.set(t.categoryId, (wm.get(t.categoryId) ?? 0) + 1);
-    }
-  }
-
-  // Determine history-based suggestion
-  let historyCategoryId: number | null = null;
-  let historyCategoryName: string | null = null;
-  const exactFreq = descFreq.get(descNorm);
-  if (exactFreq && exactFreq.size > 0) {
-    historyCategoryId = [...exactFreq.entries()].sort((a, b) => b[1] - a[1])[0][0];
-    historyCategoryName = catMap.get(historyCategoryId) ?? null;
-  } else if (descWords.length > 0) {
-    const combined = new Map<number, number>();
-    for (const w of descWords) {
-      const wf = wordFreq.get(w);
-      if (!wf) continue;
-      for (const [catId, cnt] of wf) combined.set(catId, (combined.get(catId) ?? 0) + cnt);
-    }
-    if (combined.size > 0) {
-      historyCategoryId = [...combined.entries()].sort((a, b) => b[1] - a[1])[0][0];
-      historyCategoryName = catMap.get(historyCategoryId) ?? null;
-    }
-  }
-
-  // Collect similar past transactions with exact descriptor match (for context)
-  const descLower = descriptor.toLowerCase();
-  const similarTxns = data.transactions
-    .filter((t) => t.descriptor.toLowerCase() === descLower && t.categoryId != null)
-    .slice(-8)
-    .map((t) => `  ${t.txnDate} $${Math.abs(t.amount).toFixed(2)} → ${catMap.get(t.categoryId!) ?? '?'}`);
-
-  const searchQuery = cleanDescriptorForSearch(descriptor);
-
-  // Build category list
-  const catList = data.categories
-    .filter((c) => !c.isIncome)
-    .map((c) => `${c.id}: ${c.name}`)
-    .join('\n');
-
-  // Always run web search upfront — don't rely on the model to call the tool
-  // (small local models like qwen often fail to use tools correctly)
-  onToolStatus(`Searching for "${searchQuery}"…`);
-  let webResults = '';
-  try {
-    webResults = await executeTool('search_web', { query: searchQuery }, data);
-  } catch { /* search failure is non-fatal */ }
-
-  const historyBlock = historyCategoryName
-    ? `HISTORY: Past transactions matching this descriptor were categorized as "${historyCategoryName}".`
-    : `HISTORY: No past transactions found matching this descriptor.`;
-
-  const webBlock = webResults && !webResults.includes('"error"')
-    ? `WEB SEARCH RESULTS for "${searchQuery}":\n${webResults}`
-    : `WEB SEARCH: No results found.`;
-
-  const question = `Identify this bank transaction and suggest a budget category.
-
-TRANSACTION: "${descriptor}"
-AMOUNT: $${Math.abs(amount).toFixed(2)} on ${date} via ${instrument}
-${similarTxns.length > 0 ? `EXACT PAST MATCHES:\n${similarTxns.join('\n')}\n` : ''}
-${historyBlock}
-
-${webBlock}
-
-AVAILABLE CATEGORIES (you MUST use one of these exact IDs):
-${catList}
-
-Based on the history and web results above, respond with JSON only:
-{"categoryId": <integer id from list above, or null only if you truly cannot determine>, "categoryName": "<exact name for that id>", "info": "<2-3 sentences: what this merchant sells and why you picked this category>"}`;
-
-  const conv: OllamaMsg[] = [
-    {
-      role: 'system',
-      content: 'You are a bank transaction classifier. You are given search results and transaction history. Pick the best category from the provided list and respond with JSON only. No markdown, no explanation outside the JSON.',
-    },
-    { role: 'user', content: question },
-  ];
-
-  onToolStatus('Analyzing…');
-
-  for (let i = 0; i < 3; i++) {
-    const resp = await ollamaFetch(`${settings.ollamaUrl}/api/chat`, CHAT_TIMEOUT_MS, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: settings.model,
-        messages: conv,
-        stream: false,
-        options: { temperature: 0.1 },
-      }),
-    });
-
-    if (!resp.ok) throw new Error(`Ollama error ${resp.status}`);
-
-    const result = await resp.json();
-    const msg: OllamaMsg = result.message;
-    conv.push(msg);
-
-    const content = msg.content ?? '';
-    try {
-      const jsonMatch = content.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        const parsed = JSON.parse(jsonMatch[0]) as { categoryId?: number | null; categoryName?: string | null; info?: string };
-        const finalCatId = (parsed.categoryId != null && catMap.has(parsed.categoryId))
-          ? parsed.categoryId
-          : historyCategoryId;
-        const finalCatName = finalCatId ? (catMap.get(finalCatId) ?? null) : null;
-        return { categoryId: finalCatId, categoryName: finalCatName, info: parsed.info ?? content };
-      }
-    } catch { /* fall through */ }
-
-    // Non-JSON response — use what we have
-    if (content.length > 10) {
-      return { categoryId: historyCategoryId, categoryName: historyCategoryName, info: content };
-    }
-    // Empty response — retry
-    conv.push({ role: 'user', content: 'Please respond with the JSON only, no other text.' });
-  }
-
-  return {
-    categoryId: historyCategoryId,
-    categoryName: historyCategoryName,
-    info: historyCategoryName
-      ? `Based on your transaction history, this is likely "${historyCategoryName}".`
-      : 'Unable to determine category from history or web search.',
-  };
+/** DuckDuckGo search through the Rust backend. Throws if the request fails. */
+export async function searchWeb(query: string): Promise<DDGResult[]> {
+  return (await invoke<DDGResult[]>('search_ddg', { query })) ?? [];
 }
 
 // --- Structured questions ---

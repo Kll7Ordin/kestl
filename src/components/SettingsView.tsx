@@ -2093,6 +2093,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
             <div style={{ fontSize: '0.78rem', opacity: 0.6, marginTop: 2 }}>Shows a ? button on each transaction to identify it using AI (requires Ollama)</div>
           </div>
         </label>
+        <SuggestionAccuracy />
       </div>
 
       {/* ── Tools (only when experimental enabled) ── */}
@@ -2260,4 +2261,24 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
   );
 }
 
-
+/** How often each kind of suggestion matched the category picked, from the suggestion log. */
+function SuggestionAccuracy() {
+  const feedback = useSyncExternalStore(subscribe, () => getData().aiCategoryFeedback);
+  const stats = useMemo(() => {
+    const out = { history: { right: 0, total: 0 }, ai: { right: 0, total: 0 } };
+    for (const f of feedback ?? []) {
+      if (!f.source) continue; // logged before the source was recorded
+      out[f.source].total++;
+      if (f.outcome === 'accepted') out[f.source].right++;
+    }
+    return out;
+  }, [feedback]);
+  if (stats.history.total + stats.ai.total === 0) return null;
+  const line = (label: string, s: { right: number; total: number }) =>
+    s.total ? `${label}: right ${s.right} of ${s.total} (${Math.round((100 * s.right) / s.total)}%)` : `${label}: no data yet`;
+  return (
+    <div style={{ fontSize: '0.78rem', opacity: 0.7, marginTop: '0.5rem', paddingLeft: '1.6rem' }}>
+      When you categorized a transaction that had a suggestion: {line('history chip', stats.history)} · {line('? lookup', stats.ai)}
+    </div>
+  );
+}

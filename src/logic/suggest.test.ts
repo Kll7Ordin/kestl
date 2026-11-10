@@ -89,3 +89,64 @@ describe('buildSuggester', () => {
     expect(g?.reason).toMatch(/restaurant/);
   });
 });
+
+describe('explain', () => {
+  const row = (descriptor: string, categoryId: number, amount = 20, txnDate = '2026-06-01') =>
+    makeTxn({ descriptor, categoryId, amount, txnDate });
+  const names: Record<number, string> = { 1: 'Groceries', 2: 'Fun', 3: 'Household', 7: 'Eating Out' };
+  const categoryName = (id: number) => names[id] ?? `#${id}`;
+
+  it('agrees with suggest and lists the matching merchants', () => {
+    const corpus = [row('thrifty foods #1 Victoria Bc', 1), row('thrifty foods #2 Victoria Bc', 1, 55)];
+    const s = buildSuggester(corpus);
+    const tr = s.explain('thrifty foods #9 Langley Bc', 55, { categoryName });
+    expect(tr.guess?.categoryId).toBe(s.suggest('thrifty foods #9 Langley Bc', 55)?.categoryId);
+    expect(tr.guess?.tier).toBe('name');
+    expect(tr.merchant).toBe('thrifty foods');
+    expect(tr.matches[0]).toMatchObject({ merchant: 'thrifty foods', kind: 'same merchant', purchases: 2, sameAmount: 1 });
+    expect(tr.nameScores[0]).toMatchObject({ categoryId: 1, share: 1 });
+    expect(tr.notes.join(' ')).toMatch(/Guess Groceries/);
+  });
+
+  it('says why there is no guess when history is split', () => {
+    const tr = buildSuggester([row('costco Victoria Bc', 1), row('costco Victoria Bc', 3)]).explain('costco Victoria Bc', 50, { categoryName });
+    expect(tr.guess).toBeNull();
+    expect(tr.notes.join(' ')).toMatch(/50% of the weighted vote, but a guess needs 60%/);
+    expect(tr.merchantTypeStatus).toBe('unlabelled');
+    expect(tr.notes.join(' ')).toMatch(/not labelled yet/);
+  });
+
+  it('says when no past merchant is similar', () => {
+    const tr = buildSuggester([row('petro-canada Victoria Bc', 2)]).explain('kizuna ramen Victoria Bc', 20);
+    expect(tr.guess).toBeNull();
+    expect(tr.matches).toHaveLength(0);
+    expect(tr.notes[0]).toMatch(/No past purchase has a similar merchant name/);
+  });
+
+  it('explains a kind-of-business guess and when there are too few peers', () => {
+    const corpus = [row('siam thai Victoria Bc', 7), row('pizza garden Victoria Bc', 7), row('kizuna ramen Victoria Bc', 7)];
+    const merchantTypes = { 'siam thai': 'restaurant', 'pizza garden': 'restaurant', 'kizuna ramen': 'restaurant', 'tonollis deli': 'restaurant', 'big wok': 'restaurant' };
+    const tr = buildSuggester(corpus, { merchantTypes }).explain('tonollis deli Sidney Bc', 40, { categoryName });
+    expect(tr.guess).toMatchObject({ categoryId: 7, tier: 'type' });
+    expect(tr.typePeers).toBe(3);
+    expect(tr.notes.join(' ')).toMatch(/Guess Eating Out .* other restaurant merchants/);
+
+    const few = buildSuggester(corpus.slice(0, 2), { merchantTypes }).explain('big wok Victoria Bc', 30);
+    expect(few.guess).toBeNull();
+    expect(few.notes.join(' ')).toMatch(/only 2 other restaurant merchants have categorized purchases \(needs 3\)/);
+  });
+
+  it('marks bank transfers and vague or unknown types', () => {
+    const s = buildSuggester([row('the bay Victoria Bc', 3)], { merchantTypes: { 'the bay': 'department store', 'mystery co': 'unknown' } });
+    expect(s.explain('withdrawal Free Interac E-Transfer', 20)).toMatchObject({ bankTransfer: true, merchantTypeStatus: 'not applicable' });
+    expect(s.explain('the bay Langford Bc', 20).merchantTypeStatus).toBe('vague');
+    expect(s.explain('mystery co Victoria Bc', 20).merchantTypeStatus).toBe('unknown');
+  });
+
+  it('typeProfile reports how a kind of business is filed', () => {
+    const corpus = [row('siam thai Victoria Bc', 7), row('pizza garden Victoria Bc', 7), row('red barn Victoria Bc', 1)];
+    const p = buildSuggester(corpus, { merchantTypes: { 'siam thai': 'restaurant', 'pizza garden': 'restaurant', 'red barn': 'grocery store' } }).typeProfile('restaurant');
+    expect(p.peers).toBe(2);
+    expect(p.shares).toEqual([expect.objectContaining({ categoryId: 7, share: 1 })]);
+  });
+});

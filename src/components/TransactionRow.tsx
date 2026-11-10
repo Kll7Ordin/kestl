@@ -17,6 +17,8 @@ export interface TxnRowActions {
   openMoveMonth: (t: Transaction) => void;
   editComment: (t: Transaction) => void;
   lookup: (t: Transaction) => void;
+  /** Show why the suggestion chip guessed what it did (or nothing). Local only, no AI. */
+  explain: (t: Transaction) => void;
   confirmDelete: (txnId: number) => void;
   showTooltip: (cell: HTMLElement) => void;
   hideTooltip: () => void;
@@ -33,6 +35,8 @@ interface TxnRowProps {
   suggestionCatId: number | undefined;
   suggestionName: string | undefined;
   suggestionTitle: string | undefined;
+  /** The chip comes from a saved ? lookup (history made no guess). */
+  suggestionFromAi: boolean;
   catMap: Map<number, string>;
   catColorMap: Map<number, string>;
   categoryOptions: SearchableSelectOption[];
@@ -41,12 +45,14 @@ interface TxnRowProps {
 }
 
 export const TxnRow = memo(function TxnRow({
-  t, rowClass, splits, isEditingCategory, suggestionCatId, suggestionName, suggestionTitle,
+  t, rowClass, splits, isEditingCategory, suggestionCatId, suggestionName, suggestionTitle, suggestionFromAi,
   catMap, catColorMap, categoryOptions, aiLookupEnabled, actions,
 }: TxnRowProps) {
   const a = () => actions.current;
   const credit = isCredit(t) || t.amount < 0;
   const suggestionColor = suggestionCatId != null ? catColorMap.get(suggestionCatId) ?? '#888' : '';
+  // Same rows the chips are computed for (TransactionView allSuggestions).
+  const canExplain = t.categoryId == null && !(splits && splits.length > 0) && !isCredit(t) && !t.isTransfer;
 
   return (
     <tr className={rowClass} style={t.isTransfer ? { opacity: 0.55 } : undefined}>
@@ -102,7 +108,7 @@ export const TxnRow = memo(function TxnRow({
                   cursor: 'pointer',
                   background: suggestionColor + '33',
                   color: suggestionColor,
-                  border: `1px solid ${suggestionColor}66`,
+                  border: `1px ${suggestionFromAi ? 'dashed' : 'solid'} ${suggestionColor}${suggestionFromAi ? 'aa' : '66'}`,
                   whiteSpace: 'nowrap',
                   fontSize: '0.67rem',
                   fontWeight: 500,
@@ -110,8 +116,18 @@ export const TxnRow = memo(function TxnRow({
                 title={suggestionTitle}
                 onClick={() => a().assignCategory(t.id, suggestionCatId)}
               >
-                ~{suggestionName}
+                {suggestionFromAi ? '✦ ' : '~'}{suggestionName}
               </span>
+            )}
+            {canExplain && (
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => a().explain(t)}
+                title={suggestionCatId != null ? 'Why this suggestion?' : 'Why no suggestion?'}
+                style={{ padding: '0 0.3rem', fontSize: '0.7rem', opacity: 0.55, lineHeight: 1.4 }}
+              >
+                ⓘ
+              </button>
             )}
           </div>
         )}

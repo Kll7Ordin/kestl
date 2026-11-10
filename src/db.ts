@@ -4,6 +4,7 @@ import { currentMonthStr, monthsBetween, prevMonth } from './logic/dateUtils';
 import { isEncryptedFile, createSessionKey, encryptWithKey, decryptWithPassword, type SessionKey } from './utils/crypto';
 import { isCredit, isPaypalLinked } from './logic/txnKind';
 import { removeExistingDuplicates } from './logic/duplicates';
+import type { LookupReport } from './logic/lookup';
 
 export interface Category {
   id: number;
@@ -189,11 +190,19 @@ export interface CustomParser {
   createdAt: string;
 }
 
+/**
+ * What happened to a category suggestion once the user picked a category for that transaction.
+ * Used to compare how often the history chip and the ? lookup are right.
+ */
 export interface AICategoryFeedback {
   descriptor: string;       // lowercased descriptor
   suggestedCategoryId: number;
-  acceptedCategoryId: number | null; // null = rejected (user chose different)
+  acceptedCategoryId: number | null; // the category the user picked (null = cleared)
   outcome: 'accepted' | 'rejected';
+  /** Which suggestion: the history chip or the ? lookup. Missing on entries from before 2.11. */
+  source?: 'history' | 'ai';
+  /** YYYY-MM-DD the choice was made. */
+  at?: string;
 }
 
 export interface ExperimentalBudgetItem {
@@ -245,6 +254,8 @@ export interface AppData {
   aiCategoryFeedback?: AICategoryFeedback[];
   /** Merchant key (logic/suggest.ts parseDescriptor) → kind of business, labelled by the local model. */
   merchantTypes?: Record<string, string>;
+  /** Merchant key → the last ? lookup for that merchant (search, AI reading, recommended category). */
+  merchantLookups?: Record<string, LookupReport>;
   experimentalBudgets?: ExperimentalBudget[];
   completedMigrations?: string[];
   colorThresholds?: ColorThresholds;
@@ -1172,6 +1183,12 @@ export async function mergeCategories(sourceIds: number[], targetId: number): Pr
     if (sourceSet.has(f.suggestedCategoryId)) f.suggestedCategoryId = targetId;
     if (f.acceptedCategoryId != null && sourceSet.has(f.acceptedCategoryId)) f.acceptedCategoryId = targetId;
   }
+  if (data.merchantLookups) {
+    for (const r of Object.values(data.merchantLookups)) {
+      if (r.category.categoryId != null && sourceSet.has(r.category.categoryId)) r.category.categoryId = targetId;
+    }
+    data.merchantLookups = { ...data.merchantLookups };
+  }
 
   if (target && target.savingsBucketId == null) {
     const inherit = data.categories.find((c) => sourceSet.has(c.id) && c.savingsBucketId != null);
@@ -1666,6 +1683,32 @@ export async function addMerchantTypes(labels: Record<string, string>): Promise<
   await persist();
 }
 
+/** The user picked a merchant type by hand (? lookup window). */
+export async function setMerchantType(merchantKey: string, type: string): Promise<void> {
+  pushUndoSnapshot('Set merchant type');
+  data.merchantTypes = { ...data.merchantTypes, [merchantKey]: type };
+  await persist();
+}
+
+// --- ? lookups (one saved result per merchant) ---
+const MAX_MERCHANT_LOOKUPS = 1000;
+
+export function getMerchantLookup(merchantKey: string): LookupReport | undefined {
+  return data.merchantLookups?.[merchantKey];
+}
+
+/** Save a finished lookup. Never touches any transaction's category. */
+export async function saveMerchantLookup(merchantKey: string, report: LookupReport): Promise<void> {
+  const next = { ...data.merchantLookups, [merchantKey]: report };
+  const keys = Object.keys(next);
+  if (keys.length > MAX_MERCHANT_LOOKUPS) {
+    keys.sort((a, b) => next[a].at.localeCompare(next[b].at));
+    for (const k of keys.slice(0, keys.length - MAX_MERCHANT_LOOKUPS)) delete next[k];
+  }
+  data.merchantLookups = next;
+  await persist();
+}
+
 export function getColorThresholds(): ColorThresholds {
   return data.colorThresholds ?? { ...DEFAULT_COLOR_THRESHOLDS };
 }
@@ -1698,23 +1741,26 @@ export function getAICategoryFeedback(): AICategoryFeedback[] {
   return data.aiCategoryFeedback ?? [];
 }
 
-export async function logAICategoryFeedback(
+/**
+ * Record, for each suggestion that was on offer, whether the category the user picked matched it.
+ * Call when the user categorizes a transaction that had a history and/or ? lookup suggestion.
+ */
+export async function logSuggestionOutcome(
   descriptor: string,
-  suggestedCategoryId: number,
-  outcome: 'accepted' | 'rejected',
-  acceptedCategoryId: number | null,
+  chosenCategoryId: number | null,
+  offered: { source: 'history' | 'ai'; categoryId: number }[],
 ): Promise<void> {
-  if (!data.aiCategoryFeedback) data.aiCategoryFeedback = [];
-  // Keep last 500 feedback entries to avoid unbounded growth
-  data.aiCategoryFeedback.push({
+  if (offered.length === 0) return;
+  const at = new Date().toISOString().slice(0, 10);
+  const entries: AICategoryFeedback[] = offered.map((o) => ({
     descriptor: descriptor.toLowerCase(),
-    suggestedCategoryId,
-    acceptedCategoryId,
-    outcome,
-  });
-  if (data.aiCategoryFeedback.length > 500) {
-    data.aiCategoryFeedback = data.aiCategoryFeedback.slice(-500);
-  }
+    suggestedCategoryId: o.categoryId,
+    acceptedCategoryId: chosenCategoryId,
+    outcome: o.categoryId === chosenCategoryId ? 'accepted' : 'rejected',
+    source: o.source,
+    at,
+  }));
+  data.aiCategoryFeedback = [...(data.aiCategoryFeedback ?? []), ...entries].slice(-500);
   await persist();
 }
 
