@@ -57,7 +57,9 @@ describe('buildSuggester', () => {
     const s = buildSuggester(corpus);
     expect(s.suggest('withdrawal Free Interac E-Transfer', 501)?.categoryId).toBe(10);
     expect(s.suggest('withdrawal Free Interac E-Transfer', 75)?.categoryId).toBe(11);
-    expect(s.suggest('withdrawal Free Interac E-Transfer', 240)).toBeNull();
+    // An amount matching neither: both are compelling and equal, so both are offered.
+    const both = s.suggest('withdrawal Free Interac E-Transfer', 240);
+    expect([both?.categoryId, both?.second?.categoryId].sort()).toEqual([10, 11]);
   });
 
   it('prefers the recent choice when a merchant moved category', () => {
@@ -70,8 +72,21 @@ describe('buildSuggester', () => {
     expect(s.suggest('clean cuts barbarshop Victoria Bc', 30)?.categoryId).toBe(2);
   });
 
-  it('abstains when history is split', () => {
+  it('offers two suggestions when history is evenly split between two categories', () => {
     const s = buildSuggester([row('costco Victoria Bc', 1), row('costco Victoria Bc', 2)]);
+    const g = s.suggest('costco Victoria Bc', 50);
+    expect([g?.categoryId, g?.second?.categoryId].sort()).toEqual([1, 2]);
+  });
+
+  it('offers a single suggestion when one category dominates', () => {
+    const s = buildSuggester([row('costco Victoria Bc', 1), row('costco Victoria Bc', 1), row('costco Victoria Bc', 1), row('costco Victoria Bc', 2)]);
+    const g = s.suggest('costco Victoria Bc', 50);
+    expect(g?.categoryId).toBe(1);
+    expect(g?.second).toBeUndefined();
+  });
+
+  it('abstains when three or more categories share the vote', () => {
+    const s = buildSuggester([row('costco Victoria Bc', 1), row('costco Victoria Bc', 2), row('costco Victoria Bc', 3)]);
     expect(s.suggest('costco Victoria Bc', 50)).toBeNull();
   });
 
@@ -108,10 +123,10 @@ describe('explain', () => {
     expect(tr.notes.join(' ')).toMatch(/Guess Groceries/);
   });
 
-  it('says why there is no guess when history is split', () => {
-    const tr = buildSuggester([row('costco Victoria Bc', 1), row('costco Victoria Bc', 3)]).explain('costco Victoria Bc', 50, { categoryName });
+  it('says why there is no guess when history is split three ways', () => {
+    const tr = buildSuggester([row('costco Victoria Bc', 1), row('costco Victoria Bc', 3), row('costco Victoria Bc', 4)]).explain('costco Victoria Bc', 50, { categoryName });
     expect(tr.guess).toBeNull();
-    expect(tr.notes.join(' ')).toMatch(/50% of the weighted vote, but a guess needs 60%/);
+    expect(tr.notes.join(' ')).toMatch(/33% of the weighted vote, but a guess needs 60%/);
     expect(tr.merchantTypeStatus).toBe('unlabelled');
     expect(tr.notes.join(' ')).toMatch(/not labelled yet/);
   });

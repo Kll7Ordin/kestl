@@ -150,6 +150,8 @@ export interface CategoryGuess {
   reason: string;
   /** Which evidence decided it: similar merchant names, or how this kind of business is usually filed. */
   tier: 'name' | 'type';
+  /** A close runner-up with compelling evidence of its own (no category dominates): shown as a second chip. */
+  second?: { categoryId: number; confidence: number };
 }
 
 /** One past merchant that counted towards a suggestion. */
@@ -202,6 +204,10 @@ export interface SuggestTrace {
 
 /** Types too vague to learn from. */
 const VAGUE_TYPES = new Set(['unknown', 'other', 'department store', 'bank or financial']);
+
+/** Two-chip rule: neither category dominates, but together they own the vote and each has real evidence. */
+const PAIR_MIN_SECOND_SHARE = 0.25;
+const PAIR_MIN_COMBINED = 0.8;
 
 const MIN_TYPE_PEERS = 3;
 const MIN_TYPE_SHARE = 0.65;
@@ -330,7 +336,7 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
       const raw = new Map<number, number>();
       let sameAmount = 0;
       for (const r of m.rows) {
-        const ageDays = Math.max(0, (refMs - r.dateMs) / DAY_MS);
+        const ageDays = Math.abs(refMs - r.dateMs) / DAY_MS; // distance in either direction
         const recency = 0.25 + 0.75 * Math.pow(0.5, ageDays / 240);
         let amt = 1;
         if (sim >= 0.85) {
@@ -371,7 +377,7 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
       if (m.parsed.key === excludeKey) continue;
       peers++;
       const latest = Math.max(...m.rows.map((r) => r.dateMs));
-      const recency = 0.4 + 0.6 * Math.pow(0.5, Math.max(0, (refMs - latest) / DAY_MS) / 365);
+      const recency = 0.4 + 0.6 * Math.pow(0.5, Math.abs(refMs - latest) / DAY_MS / 365);
       const perCat = new Map<number, number>();
       for (const r of m.rows) perCat.set(r.categoryId, (perCat.get(r.categoryId) ?? 0) + 1);
       for (const [cat, n] of perCat) scores.set(cat, (scores.get(cat) ?? 0) + recency * n / m.rows.length);
@@ -409,6 +415,18 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
     const n = top(scores);
     if (n.total <= 0) {
       note(q.product ? 'No past product shares enough words with this one.' : 'No past purchase has a similar merchant name.');
+    } else if (n.top / n.total < minShare && (() => {
+      // No single winner: offer two if exactly two categories have compelling, comparable evidence.
+      const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
+      const [a, b] = ranked;
+      if (!b || a[1] < minEvidence || b[1] < minEvidence) return false;
+      if (b[1] / n.total < PAIR_MIN_SECOND_SHARE || (a[1] + b[1]) / n.total < PAIR_MIN_COMBINED) return false;
+      const reason = best.kind ? `${best.kind}${best.n > 1 ? ` ×${best.n}` : ''}` : '';
+      guess = { categoryId: a[0], confidence: a[1] / n.total, scores, reason, tier: 'name', second: { categoryId: b[0], confidence: b[1] / n.total } };
+      note(`No single winner, but two categories share the vote: ${name(a[0])} (${pct(a[1] / n.total)}) and ${name(b[0])} (${pct(b[1] / n.total)}). Showing both.`);
+      return true;
+    })()) {
+      // two-way guess made above
     } else if (n.top / n.total < minShare) {
       note(`From similar names: ${name(n.topCat)} leads with ${pct(n.top / n.total)} of the weighted vote, but a guess needs ${pct(minShare)}.`);
     } else if (n.top < minEvidence) {
@@ -468,7 +486,7 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
   const refFor = (asOf?: string) => (asOf ? Date.parse(asOf) || latestMs : latestMs);
 
   return {
-    /** Best guess for one descriptor/amount, or null when not confident. `asOf` defaults to the newest corpus date. */
+    /** Best guess for one descriptor/amount, or null when not confident. `asOf` (the transaction's own date) is the point recency is measured from, in both directions; defaults to the newest corpus date. */
     suggest(descriptor: string, amount: number, asOf?: string): CategoryGuess | null {
       return run(descriptor, amount, refFor(asOf));
     },

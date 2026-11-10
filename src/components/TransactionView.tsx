@@ -226,7 +226,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     const suggestions = new Map<number, RowSuggestion>();
     for (const t of suggestTxns) {
       if (t.categoryId != null || isCredit(t) || t.isTransfer || suggestSplits.has(t.id)) continue;
-      const g = suggester.suggest(t.descriptor, t.amount);
+      const g = suggester.suggest(t.descriptor, t.amount, t.txnDate);
       const history = g && live.has(g.categoryId) ? g : null;
       const lk = merchantLookups?.[parseDescriptor(t.descriptor).key];
       const aiCat = lk?.category.categoryId;
@@ -284,6 +284,9 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
 
   const win = useWindowedRows(txns.length, tbodyRef);
 
+  const liveCatIds = useMemo(() => new Set(categories.filter((c) => !c.archived).map((c) => c.id)), [categories]);
+  const live2 = (id: number) => liveCatIds.has(id);
+
   function suggestionTitleFor(s: RowSuggestion): string {
     const g = s.history;
     if (!g) {
@@ -337,6 +340,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     if (t && t.categoryId == null && categoryId != null && offer) {
       const offered: { source: 'history' | 'ai'; categoryId: number }[] = [];
       if (offer.history) offered.push({ source: 'history', categoryId: offer.history.categoryId });
+      if (offer.history?.second) offered.push({ source: 'history', categoryId: offer.history.second.categoryId });
       if (offer.ai) offered.push({ source: 'ai', categoryId: offer.ai.categoryId });
       await logSuggestionOutcome(t.descriptor, categoryId, offered);
     }
@@ -514,6 +518,14 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     }
     setRefundPrompts((prev) => prev.filter((r) => r.refundTxn.id !== candidate.refundTxn.id));
   }
+
+  const [showTop, setShowTop] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setShowTop(window.scrollY > 400);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
 
   return (
     <div>
@@ -759,6 +771,8 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                   suggestionName={chipCat != null ? catMap.get(chipCat) : undefined}
                   suggestionTitle={suggestion ? suggestionTitleFor(suggestion) : undefined}
                   suggestionFromAi={suggestion != null && suggestion.history == null}
+                  suggestion2CatId={suggestion?.history?.second && live2(suggestion.history.second.categoryId) ? suggestion.history.second.categoryId : undefined}
+                  suggestion2Name={suggestion?.history?.second ? catMap.get(suggestion.history.second.categoryId) : undefined}
                   catMap={catMap}
                   catColorMap={catColorMap}
                   categoryOptions={categoryOptions}
@@ -1103,7 +1117,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       {explainTxn && (
         <SuggestionDetails
           transaction={allTransactions.find((x) => x.id === explainTxn.id) ?? explainTxn}
-          trace={suggester.explain(explainTxn.descriptor, explainTxn.amount, { categoryName: (id) => catMap.get(id) ?? `#${id}` })}
+          trace={suggester.explain(explainTxn.descriptor, explainTxn.amount, { asOf: explainTxn.txnDate, categoryName: (id) => catMap.get(id) ?? `#${id}` })}
           lookup={appData.merchantLookups?.[parseDescriptor(explainTxn.descriptor).key]}
           aiLookupEnabled={!!txnAiLookupEnabled}
           catMap={catMap}
@@ -1125,6 +1139,16 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
             </div>
           </div>
         </div>,
+        document.body,
+      )}
+      {showTop && createPortal(
+        <button
+          className="btn"
+          title="Back to top"
+          aria-label="Back to top"
+          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+          style={{ position: 'fixed', right: '1.25rem', bottom: '1.25rem', zIndex: 900, borderRadius: '50%', width: 40, height: 40, padding: 0, boxShadow: '0 2px 8px rgba(0,0,0,0.35)' }}
+        >↑</button>,
         document.body,
       )}
     </div>

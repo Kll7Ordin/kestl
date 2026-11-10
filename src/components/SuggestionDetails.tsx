@@ -55,7 +55,7 @@ export function HistoryEvidence({ trace, catMap, catColorMap }: CatProps & { tra
         <span style={{ opacity: 0.6 }}>Chip</span>
         <span style={{ fontWeight: 600 }}>
           {g
-            ? <>{catMap.get(g.categoryId) ?? `#${g.categoryId}`} <span style={{ fontWeight: 400, opacity: 0.7 }}>({pct(g.confidence)}, {g.tier === 'type' ? 'from the kind of business' : 'from similar names'})</span></>
+            ? <>{catMap.get(g.categoryId) ?? `#${g.categoryId}`} <span style={{ fontWeight: 400, opacity: 0.7 }}>({pct(g.confidence)}, {g.tier === 'type' ? 'from the kind of business' : 'from similar names'})</span>{g.second && <> <span style={{ fontWeight: 400, opacity: 0.7 }}>or</span> {catMap.get(g.second.categoryId) ?? `#${g.second.categoryId}`} <span style={{ fontWeight: 400, opacity: 0.7 }}>({pct(g.second.confidence)})</span></>}</>
             : <span style={{ color: 'var(--text-3)' }}>no guess</span>}
         </span>
       </div>
@@ -150,6 +150,9 @@ export function SuggestionDetails({ transaction: t, trace, lookup, aiLookupEnabl
         <div className="modal-actions" style={{ marginTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
           {t.categoryId == null && trace.guess && (
             <button className="btn btn-primary" onClick={() => onUse(trace.guess!.categoryId, 'history')}>Use {catMap.get(trace.guess.categoryId)}</button>
+          )}
+          {t.categoryId == null && trace.guess?.second && (
+            <button className="btn btn-primary" onClick={() => onUse(trace.guess!.second!.categoryId, 'history')}>Use {catMap.get(trace.guess.second.categoryId)}</button>
           )}
           {t.categoryId == null && ai != null && ai !== trace.guess?.categoryId && (
             <button className="btn btn-primary" onClick={() => onUse(ai, 'ai')}>Use AI's {catMap.get(ai)}</button>

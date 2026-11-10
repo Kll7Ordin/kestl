@@ -63,7 +63,7 @@ export function TransactionLookup({ transaction, suggester, onClose }: Props) {
   const pickable = useMemo(() => appData.categories.filter((c) => !c.isIncome && !c.archived), [appData.categories]);
 
   const trace = useMemo(
-    () => suggester.explain(transaction.descriptor, transaction.amount, { categoryName: (id) => catMap.get(id) ?? `#${id}` }),
+    () => suggester.explain(transaction.descriptor, transaction.amount, { asOf: transaction.txnDate, categoryName: (id) => catMap.get(id) ?? `#${id}` }),
     [suggester, transaction.descriptor, transaction.amount, catMap],
   );
   const merchantKey = trace.merchant;

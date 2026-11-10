@@ -37,6 +37,9 @@ interface TxnRowProps {
   suggestionTitle: string | undefined;
   /** The chip comes from a saved ? lookup (history made no guess). */
   suggestionFromAi: boolean;
+  /** Close runner-up from history, shown as a second chip. */
+  suggestion2CatId?: number;
+  suggestion2Name?: string;
   catMap: Map<number, string>;
   catColorMap: Map<number, string>;
   categoryOptions: SearchableSelectOption[];
@@ -45,7 +48,7 @@ interface TxnRowProps {
 }
 
 export const TxnRow = memo(function TxnRow({
-  t, rowClass, splits, isEditingCategory, suggestionCatId, suggestionName, suggestionTitle, suggestionFromAi,
+  t, rowClass, splits, isEditingCategory, suggestionCatId, suggestionName, suggestionTitle, suggestionFromAi, suggestion2CatId, suggestion2Name,
   catMap, catColorMap, categoryOptions, aiLookupEnabled, actions,
 }: TxnRowProps) {
   const a = () => actions.current;
@@ -119,6 +122,19 @@ export const TxnRow = memo(function TxnRow({
                 {suggestionFromAi ? '✦ ' : '~'}{suggestionName}
               </span>
             )}
+            {t.categoryId == null && suggestionCatId != null && suggestion2CatId != null && (() => {
+              const c2 = catColorMap.get(suggestion2CatId) ?? '#888';
+              return (
+                <span
+                  className="chip"
+                  style={{ cursor: 'pointer', background: c2 + '33', color: c2, border: `1px solid ${c2}66`, whiteSpace: 'nowrap', fontSize: '0.67rem', fontWeight: 500 }}
+                  title={suggestionTitle}
+                  onClick={() => a().assignCategory(t.id, suggestion2CatId)}
+                >
+                  ~{suggestion2Name}
+                </span>
+              );
+            })()}
             {canExplain && (
               <button
                 className="btn btn-ghost btn-sm"
