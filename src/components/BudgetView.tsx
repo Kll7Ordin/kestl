@@ -3,6 +3,7 @@ import { flushSync, createPortal } from 'react-dom';
 import { getData, subscribe, upsertBudget, deleteBudget, updateBudgetNote, addBudgetGroup, updateBudgetGroup, deleteBudgetGroup, reorderBudgetsInGroup, addCategory, updateCategoryNote, updateCategoryName, updateCategoryIsIncome, withUndo, getColorThresholds, copyBudgetToMonths, getDisplaySettings, updateDisplaySettings, type ColorThresholds, type Category, type BudgetGroup, type ExperimentalBudget } from '../db';
 import { ImportBudgetCard } from './ImportBudgetCard';
 import { SearchableSelect } from './SearchableSelect';
+import { monthLabel } from '../logic/dateUtils';
 import { formatAmount } from '../utils/format';
 import { buildRows, type BudgetRow } from '../logic/budgetRows';
 import { projectCurrentMonth, type MonthProjection } from '../logic/forecast';
@@ -474,8 +475,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   async function copyFromMonth(sourceMonth: string) {
     await copyBudgetToMonths(sourceMonth, [month]);
     const sourceCount = getData().budgets.filter((b) => b.month === month).length;
-    const label = new Date(sourceMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-    alert(`Copied ${sourceCount} budget items from ${label}.`);
+    alert(`Copied ${sourceCount} budget items from ${monthLabel(sourceMonth)}.`);
     setConfirmOverwrite(null);
     setShowPickMonth(false);
   }
@@ -526,6 +526,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   const yetToReceive = totalIncome > 0 ? totalIncome - totalReceived : 0;
   const net = totalIncome - totalTarget;
   const grouped = groupRows(expenseRows, budgetGroups);
+  const budgetedCatIds = new Set(rows.map((r) => r.categoryId));
 
   const COLS = 7;
   const [y, mon] = month.split('-').map(Number);
@@ -1087,7 +1088,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
         <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
           <div className="field" style={{ marginBottom: 0 }}>
             <label>Existing category</label>
-            <SearchableSelect options={categories.filter((c) => !c.archived).map((c) => ({ value: c.id, label: c.name }))}
+            <SearchableSelect options={categories.filter((c) => !c.archived && !budgetedCatIds.has(c.id)).map((c) => ({ value: c.id, label: c.name }))}
               value={newCatId}
               onChange={(v) => { setNewCatId(v === '' ? '' : Number(v)); if (v !== '') setNewCatName(''); }}
               placeholder="Select..." />
@@ -1168,7 +1169,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                           copyFromMonth(m);
                         }
                       }}>
-                      {new Date(m + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+                      {monthLabel(m)}
                     </button>
                   ))}
                 </div>
