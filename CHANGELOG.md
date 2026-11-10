@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.12.0](https://github.com/Kll7Ordin/kestl/compare/v2.11.0...v2.12.0) (2026-11-10)
+
+
+### Features
+
+* **suggestions:** show up to two suggestion chips when two categories are close ([8571732](https://github.com/Kll7Ordin/kestl/commit/8571732c998965ffd2a6fbc526d6631a2515ef00))
+
 ## [2.11.0](https://github.com/Kll7Ordin/kestl/compare/v2.10.0...v2.11.0) (2026-11-10)
 
 
