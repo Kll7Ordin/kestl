@@ -29,6 +29,12 @@ describe('budget math characterization', () => {
     expect(r.offBudgetTotal).toBeCloseTo(35); // Fun has no March budget
   });
 
+  it('categories flagged excludeFromOffBudget are left out of the off-budget total', () => {
+    const d = getData();
+    const cats = d.categories.map((c) => (c.name === 'Fun' ? { ...c, excludeFromOffBudget: true } : c));
+    expect(buildRows('2026-03', cats, d.budgetGroups, 'ytd').offBudgetTotal).toBeCloseTo(0);
+  });
+
   it('computeYearData 2026 overall', () => {
     expect(computeYearData(getData(), { year: 2026, scope: 'overall', selectedCats: [], selectedGroups: [], ytdMode: 'ytd' })).toMatchSnapshot();
   });

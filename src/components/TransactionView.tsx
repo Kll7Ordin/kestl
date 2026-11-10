@@ -191,11 +191,11 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     if (starredFilter) result = result.filter((t) => t.starred);
     if (offBudgetFilter) {
       const budgetedCatIds = new Set(budgets.filter((b) => b.month === month).map((b) => b.categoryId));
-      const incomeCatIds = new Set(categories.filter((c) => c.isIncome).map((c) => c.id));
+      const skipCatIds = new Set(categories.filter((c) => c.isIncome || c.excludeFromOffBudget).map((c) => c.id));
       result = result.filter((t) => {
         const splits = splitsMap.get(t.id);
-        if (splits && splits.length > 0) return splits.some((s) => !budgetedCatIds.has(s.categoryId) && !incomeCatIds.has(s.categoryId));
-        return t.categoryId != null && !budgetedCatIds.has(t.categoryId) && !incomeCatIds.has(t.categoryId);
+        if (splits && splits.length > 0) return splits.some((s) => !budgetedCatIds.has(s.categoryId) && !skipCatIds.has(s.categoryId));
+        return t.categoryId != null && !budgetedCatIds.has(t.categoryId) && !skipCatIds.has(t.categoryId);
       });
     }
     if (search.trim()) {

@@ -114,9 +114,10 @@ export function buildRows(month: string, categories: Category[], _budgetGroups: 
 
   // Off-budget: expense spending in categories without a budget this month
   const budgetCatIds = new Set(budgets.map((b) => b.categoryId));
+  const excludedCatIds = new Set(categories.filter((c) => c.excludeFromOffBudget).map((c) => c.id));
   let offBudgetTotal = 0;
   for (const [catId, amount] of spendByCategory) {
-    if (!budgetCatIds.has(catId) && !allIncomeCatIds.has(catId)) offBudgetTotal += amount;
+    if (!budgetCatIds.has(catId) && !allIncomeCatIds.has(catId) && !excludedCatIds.has(catId)) offBudgetTotal += amount;
   }
 
   return { rows, priorMonthCount: priorMonths.length, allIncomeReceived, uncatTotal: cur?.uncategorizedDebit ?? 0, offBudgetTotal };

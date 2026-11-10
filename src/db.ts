@@ -16,6 +16,7 @@ export interface Category {
   archived?: boolean; // hidden from pickers; history still shows
   rollover?: boolean; // unspent/overspent budget carries into the next month
   rolloverStartMonth?: string; // YYYY-MM the carry starts from
+  excludeFromOffBudget?: boolean; // not counted in "spending outside this month's budget"
 }
 
 // Palette: 30 visually distinct colors via golden-angle hue spread
@@ -1026,6 +1027,15 @@ export async function startupCleanup(): Promise<CleanupResult[]> {
     return 1;
   });
 
+  // 17. "Transfer - Do Not Count" starts out excluded from the off-budget spending total
+  migrate(results, 'excludeTransferFromOffBudget', () => {
+    let n = 0;
+    for (const c of data.categories) {
+      if (c.name.trim().replace(/\s+/g, ' ').toLowerCase() === 'transfer - do not count') { c.excludeFromOffBudget = true; n++; }
+    }
+    return n;
+  });
+
   // 13. (every launch) backfill category colors for categories that don't have one yet
   for (const c of data.categories) {
     if (!c.color) { c.color = pickDistinctColor(data.categories); colorized++; }
@@ -1096,6 +1106,12 @@ export async function setCategoryRollover(id: number, on: boolean): Promise<void
   // Start from the current month so turning it on doesn't pull in years of history.
   cat.rolloverStartMonth = on ? currentMonthStr() : undefined;
   await persist();
+}
+
+export async function setCategoryExcludeFromOffBudget(id: number, on: boolean): Promise<void> {
+  pushUndoSnapshot(on ? 'Exclude from off-budget total' : 'Include in off-budget total');
+  const cat = data.categories.find((c) => c.id === id);
+  if (cat) { cat.excludeFromOffBudget = on || undefined; await persist(); }
 }
 
 export async function setCategoryArchived(id: number, archived: boolean): Promise<void> {

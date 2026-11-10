@@ -12,6 +12,7 @@ import {
   getCategoryUsage,
   setCategoryArchived,
   setCategoryRollover,
+  setCategoryExcludeFromOffBudget,
   type Category,
   addCategoryRule,
   updateCategoryRule,
@@ -176,6 +177,16 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
                 style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem' }}
               >
                 Rollover
+              </button>
+              <button
+                className={`btn btn-sm ${c.excludeFromOffBudget ? 'btn-primary' : 'btn-ghost'}`}
+                title={c.excludeFromOffBudget
+                  ? "Not counted in \"spending outside this month's budget\". Click to count it again."
+                  : "Don't count this category in \"spending outside this month's budget\""}
+                onClick={() => setCategoryExcludeFromOffBudget(c.id, !c.excludeFromOffBudget)}
+                style={{ fontSize: '0.75rem', padding: '0.15rem 0.5rem' }}
+              >
+                Skip off-budget
               </button>
               <button className="btn btn-danger btn-sm" onClick={() => handleDeleteClick(c)}>
                 &times;
