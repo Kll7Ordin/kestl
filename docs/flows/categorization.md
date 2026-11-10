@@ -1,6 +1,6 @@
 # Categorization flow
 
-There are two distinct categorization mechanisms. **Rule-based assignment** runs at import time inside `categorizeTransactionsInPlace()` and assigns a `categoryId` (or records a split action) before transactions are persisted. **Suggestion scoring** runs on demand via `computeGuessScores()` / `guessCategory()` for transactions that didn't match any rule — it compares against all existing categorized transactions and produces a ranked score map.
+There are two distinct categorization mechanisms. **Rule-based assignment** runs at import time inside `categorizeTransactionsInPlace()` and assigns a `categoryId` (or records a split action) before transactions are persisted. **Suggestion scoring** (`logic/suggest.ts`) runs for transactions that didn't match any rule — see the `kestl-data-flows` skill for how it works.
 
 ## Decision flow
 
@@ -14,19 +14,7 @@ flowchart TD
     D -->|"yes"| E["Record SplitAction\ntxnIndex + resolved amounts\nno categoryId set"]
     D -->|"no"| F["Set txn.categoryId\n= rule.categoryId"]
 
-    C -->|"no rule matched"| G["computeGuessScores()\ncategorize.ts:56\nscan all categorized transactions"]
-
-    G --> T1["Tier 1 — 40 pts\nnorm === tNorm\nexact normalized match"]
-    G --> T2["Tier 2 — 25 pts\nstripIds matches\nremoves 6+ digit seqs and #ref tokens\nrequires stripped.length > 2"]
-    G --> T3["Tier 3 — 10 pts\ndiceSimilarity >= 0.6\nDice coefficient on trigrams"]
-    G --> T4["Tier 4 — 1 pt each\nshared meaningful keywords\nlen >= 3, not in NOISE_WORDS"]
-
-    T1 --> ACC["Accumulate score\nper categoryId"]
-    T2 --> ACC
-    T3 --> ACC
-    T4 --> ACC
-
-    ACC --> WIN["guessCategory()\nreturn highest-scoring categoryId\nor null if no matches"]
+    C -->|"no rule matched"| G["Suggestion chip\nlogic/suggest.ts buildSuggester()\n(not assigned until clicked)"]
 ```
 
 ## Rule matching details
@@ -40,18 +28,16 @@ Optional `amountMatch` — must be within `$0.01` of `txn.amount`.
 
 ## Scoring details
 
-**Noise word filtering (Tier 4)** — the `NOISE_WORDS` set (`categorize.ts:25`) excludes common filler: articles, prepositions, payment-type words (`pos`, `purchase`, `debit`, `credit`, `transfer`, `deposit`, `withdrawal`, `payment`), Canadian provincial abbreviations (`bc`, `ab`, `on`, `qc`, …), and corporate suffixes (`inc`, `ltd`, `corp`, `co`, `company`).
-
-**Trigram similarity (Tier 3)** — `diceSimilarity(a, b)` computes `(2 × |intersection|) / (|trigramsA| + |trigramsB|)` where each trigram set is built from all 3-character substrings. Threshold is `0.6`.
-
-**Batch variant** — `batchGetGuessScores()` (`categorize.ts:108`) pre-processes the full transaction corpus once, then scores multiple query descriptors against it. Used when computing suggestions for many transactions simultaneously to avoid redundant `normalize`/`stripIds` work.
+See the `kestl-data-flows` skill (category suggestion scoring).
 
 ## Files involved
 
 | File | Role |
 |---|---|
-| `src/logic/categorize.ts` | All categorization logic: `categorizeTransactionsInPlace`, `computeGuessScores`, `guessCategory`, `batchGetGuessScores`, `runRuleOnHistory`, `createRuleAndApply` |
+| `src/logic/categorize.ts` | All categorization logic: `categorizeTransactionsInPlace`, `runRuleOnHistory`, `createRuleAndApply` |
 | `src/db.ts` | Stores `categoryRules` and `transactions`; `getData()` is called to read both |
 | `src/components/ImportView.tsx` | Calls `categorizeTransactionsInPlace()` before inserting transactions |
-| `src/components/TransactionView.tsx` | Calls `batchGetGuessScores()` to render suggestion chips on uncategorized rows |
+| `src/logic/suggest.ts` | Merchant parsing and history-based suggestions |
+| `src/logic/aiSuggest.ts` | Local-model merchant labels (kind of business) used as a fallback tier |
+| `src/components/TransactionView.tsx` | Builds the suggester and renders suggestion chips on uncategorized rows |
 | `src/components/SettingsView.tsx` | Calls `runRuleOnHistory()` when user applies a rule retroactively |

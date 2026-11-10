@@ -7,7 +7,6 @@ import {
   type AppData,
   type AISettings,
   type CustomParser,
-  type AICategoryFeedback,
 } from '../db';
 import { isCredit } from './txnKind';
 
@@ -658,98 +657,6 @@ Based on the history and web results above, respond with JSON only:
       ? `Based on your transaction history, this is likely "${historyCategoryName}".`
       : 'Unable to determine category from history or web search.',
   };
-}
-
-// --- Category suggestions ---
-
-export interface CategorySuggestion {
-  txnId: number;
-  categoryId: number;
-  categoryName: string;
-}
-
-/**
- * Ask the LLM to suggest categories for a batch of uncategorized transactions.
- * Uses historical categorizations and past feedback — no web search.
- * Returns only confident suggestions; uncertain ones are omitted.
- */
-export async function suggestCategories(
-  transactions: Array<{ id: number; descriptor: string; amount: number; txnDate: string }>,
-  categories: Array<{ id: number; name: string }>,
-  settings: AISettings,
-  feedback?: AICategoryFeedback[],
-): Promise<CategorySuggestion[]> {
-  if (transactions.length === 0) return [];
-
-  const appData = getData();
-  const catMap = new Map(categories.map((c) => [c.id, c.name]));
-
-  // Build historical examples from already-categorized transactions
-  const catById = new Map(appData.categories.map((c) => [c.id, c.name]));
-  const historicalExamples = appData.transactions
-    .filter((t) => t.categoryId != null && !isCredit(t))
-    .slice(-200)
-    .map((t) => `"${t.descriptor}" → ${catById.get(t.categoryId!) ?? '?'}`)
-    .join('\n');
-
-  // Past feedback: patterns where AI suggestions were accepted or corrected
-  const feedbackLines = (feedback ?? [])
-    .slice(-100)
-    .map((f) => {
-      const sug = catById.get(f.suggestedCategoryId) ?? '?';
-      if (f.outcome === 'accepted') return `  "${f.descriptor}" → ${sug} ✓`;
-      const accepted = f.acceptedCategoryId ? (catById.get(f.acceptedCategoryId) ?? '?') : 'none';
-      return `  "${f.descriptor}" → suggested ${sug} but user chose ${accepted} ✗`;
-    })
-    .join('\n');
-
-  const archivedIds = new Set(appData.categories.filter((c) => c.archived).map((c) => c.id));
-  const catList = categories.filter((c) => !archivedIds.has(c.id)).map((c) => `${c.id}: ${c.name}`).join('\n');
-  const txnList = transactions
-    .map((t) => `${t.id}: "${t.descriptor}" $${t.amount.toFixed(2)}`)
-    .join('\n');
-
-  const prompt = `You are categorizing bank transactions. Use historical patterns and your knowledge of merchants — do NOT search the web.
-
-Categories:
-${catList}
-
-Historical categorizations from this user:
-${historicalExamples || '(none yet)'}
-${feedbackLines ? `\nPast AI suggestion feedback:\n${feedbackLines}` : ''}
-
-Transactions to categorize:
-${txnList}
-
-Return ONLY a JSON array, nothing else: [{"id": <txnId>, "categoryId": <id>}, ...]
-Only include transactions you are confident about. Skip uncertain ones.`;
-
-  try {
-    const resp = await ollamaFetch(`${settings.ollamaUrl}/api/chat`, CHAT_TIMEOUT_MS, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: settings.model,
-        messages: [{ role: 'user', content: prompt }],
-        stream: false,
-        options: { temperature: 0.1 },
-      }),
-    });
-
-    if (!resp.ok) return [];
-
-    const result = await resp.json();
-    const content: string = result.message?.content ?? '';
-    const match = content.match(/\[[\s\S]*\]/);
-    if (!match) return [];
-
-    const raw = JSON.parse(match[0]) as Array<{ id: number; categoryId: number }>;
-    return raw
-      .filter((r) => r.id && r.categoryId && catMap.has(Number(r.categoryId)))
-      .map((r) => ({ txnId: Number(r.id), categoryId: Number(r.categoryId), categoryName: catMap.get(Number(r.categoryId))! }));
-  } catch {
-    return [];
-  }
 }
 
 // --- Structured questions ---

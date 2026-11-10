@@ -76,7 +76,7 @@ src/
 │   ├── duplicates.ts            # Count-based duplicate detection for incoming CSV rows
 │   ├── matching.ts              # PayPal-to-bank-debit linking
 │   ├── refunds.ts               # Refund candidate detection and month-date adjustment
-│   ├── llm.ts                   # Ollama API calls: chat, suggestCategories, lookupTransaction, generateParser
+│   ├── llm.ts                   # Ollama API calls: chat, lookupTransaction, generateParser
 │   ├── recurring.ts             # Generates transactions from RecurringTemplate records
 │   ├── savings.ts               # Savings balance calculations
 │   └── dateUtils.ts             # Date arithmetic helpers
@@ -199,9 +199,8 @@ See the `kestl-extension-points` skill.
 |---|---|
 | Rule-based categorization at import time | `categorizeTransactionsInPlace()` — `logic/categorize.ts:156` |
 | Apply a rule retroactively to history | `runRuleOnHistory()` — `logic/categorize.ts:259` |
-| Fuzzy score suggestions (single txn) | `guessCategory()` / `getGuessScores()` — `logic/categorize.ts:85` |
-| Fuzzy score suggestions (batch) | `batchGetGuessScores()` — `logic/categorize.ts:108` |
-| LLM-based bulk suggestions (import) | `suggestCategories()` — `logic/llm.ts:661` |
+| History-based suggestions (merchant parsing, weighted vote) | `parseDescriptor()` / `buildSuggester()` — `logic/suggest.ts` |
+| AI merchant labels (kind of business, saved in `AppData.merchantTypes`) | `classifyMerchants()` — `logic/aiSuggest.ts` |
 | LLM + web search (single merchant) | `lookupTransaction()` — `logic/llm.ts:489` |
 | Bulk categorize by pattern (no rule saved) | `bulkCategorizeByDescriptor()` — `logic/categorize.ts:215` |
 | Create rule + apply immediately | `createRuleAndApply()` — `logic/categorize.ts:290` |

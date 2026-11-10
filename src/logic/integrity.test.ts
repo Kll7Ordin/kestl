@@ -3,7 +3,7 @@ import {
   __setDataForTests, getData, deleteCategory, mergeCategories, getCategoryUsage, setCategoryArchived,
   getSelectableCategories, startupCleanup, setSplits,
 } from '../db';
-import { resolveSplits, recategorizeAll, runRuleOnHistory, batchGetGuessScores } from './categorize';
+import { resolveSplits, recategorizeAll, runRuleOnHistory } from './categorize';
 import { getMonthAggregates, getRolloverCarry } from './spend';
 import { emptyFixture, makeTxn, richFixture } from '../test/fixtures';
 
@@ -95,18 +95,6 @@ describe('spend aggregates', () => {
     const d = richFixture();
     d.transactions.find((t) => t.descriptor === 'MYSTERY SHOP')!.isTransfer = true;
     expect(getMonthAggregates(d).get('2026-03')!.uncategorizedDebit).toBe(0);
-  });
-});
-
-describe('suggestions', () => {
-  it('batch matches single scoring and skips archived categories', () => {
-    const d = emptyFixture();
-    d.categories = [{ id: 1, name: 'A' }, { id: 2, name: 'B', archived: true }];
-    d.transactions = [makeTxn({ descriptor: 'SHOP ONE', categoryId: 1 }), makeTxn({ descriptor: 'SHOP TWO', categoryId: 2 })];
-    __setDataForTests(d);
-    const r = batchGetGuessScores([{ id: 1, descriptor: 'SHOP ONE' }, { id: 2, descriptor: 'SHOP TWO' }], getData().transactions);
-    expect(r.get(1)?.get(1)).toBe(40);
-    expect(r.get(2)?.has(2)).toBeFalsy();
   });
 });
 

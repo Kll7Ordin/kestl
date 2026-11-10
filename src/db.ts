@@ -3,6 +3,7 @@ import { buildSeedData, buildDemoData } from './seed';
 import { currentMonthStr, monthsBetween, prevMonth } from './logic/dateUtils';
 import { isEncryptedFile, createSessionKey, encryptWithKey, decryptWithPassword, type SessionKey } from './utils/crypto';
 import { isCredit, isPaypalLinked } from './logic/txnKind';
+import { removeExistingDuplicates } from './logic/duplicates';
 
 export interface Category {
   id: number;
@@ -242,6 +243,8 @@ export interface AppData {
   aiSettings?: AISettings;
   customParsers?: CustomParser[];
   aiCategoryFeedback?: AICategoryFeedback[];
+  /** Merchant key (logic/suggest.ts parseDescriptor) → kind of business, labelled by the local model. */
+  merchantTypes?: Record<string, string>;
   experimentalBudgets?: ExperimentalBudget[];
   completedMigrations?: string[];
   colorThresholds?: ColorThresholds;
@@ -664,6 +667,12 @@ export function getFilePath(): string | null {
 export interface CleanupResult { id: string; changed: number }
 
 /** Run a one-time migration (gated by data.completedMigrations). */
+export const REMOVE_RENAMED_DUPLICATES = 'removeRenamedBankDuplicates';
+
+export function isMigrationDone(id: string): boolean {
+  return data.completedMigrations?.includes(id) ?? false;
+}
+
 function migrate(results: CleanupResult[], id: string, fn: () => number): void {
   if (!data.completedMigrations) data.completedMigrations = [];
   if (data.completedMigrations.includes(id)) return;
@@ -853,6 +862,10 @@ export async function startupCleanup(): Promise<CleanupResult[]> {
     }
     return csvDupIds.size;
   });
+
+  // 8c. One-time: remove copies of the same card charge that Scotia renamed between statements
+  // ("penna co" / "sp penna co."), which import-time duplicate detection used to miss.
+  migrate(results, REMOVE_RENAMED_DUPLICATES, () => removeExistingDuplicates(data));
 
   // 8b. One-time: strip " - identifier" suffixes from instrument names
   migrate(results, 'stripInstrumentIdentifiers', () => {
@@ -1638,6 +1651,18 @@ export function getAISettings(): AISettings {
 
 export async function updateAISettings(settings: AISettings): Promise<void> {
   data.aiSettings = settings;
+  await persist();
+}
+
+// --- Merchant types (AI labels used by category suggestions) ---
+export function getMerchantTypes(): Record<string, string> {
+  return data.merchantTypes ?? {};
+}
+
+export async function addMerchantTypes(labels: Record<string, string>): Promise<void> {
+  if (Object.keys(labels).length === 0) return;
+  // New object so memos keyed on it re-run.
+  data.merchantTypes = { ...data.merchantTypes, ...labels };
   await persist();
 }
 

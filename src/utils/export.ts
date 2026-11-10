@@ -217,13 +217,15 @@ function csvField(v: string): string {
  * Amount uses the sign shown in the app (spending negative, credits positive). Split transactions
  * list each portion in Category; Note holds the comment and star note, if any.
  */
-export function transactionsToCsv(
+const TXN_HEADER = ['Date', 'Descriptor', 'Instrument', 'Amount', 'Category', 'Note'];
+
+/** The exported columns for each transaction: date, descriptor, instrument, signed amount, category, note. */
+export function transactionRows(
   txns: Transaction[],
   catName: (id: number) => string | undefined,
   splitsFor: (txnId: number) => TransactionSplit[] | undefined,
-): string {
-  const lines = ['Date,Descriptor,Instrument,Amount,Category,Note'];
-  for (const t of txns) {
+): string[][] {
+  return txns.map((t) => {
     const credit = isCredit(t) || t.amount < 0;
     const amount = (credit ? Math.abs(t.amount) : -Math.abs(t.amount)).toFixed(2);
     const splits = splitsFor(t.id);
@@ -231,9 +233,54 @@ export function transactionsToCsv(
       ? splits.map((s) => `${catName(s.categoryId) ?? '?'} ${Math.abs(s.amount).toFixed(2)}`).join('; ')
       : t.categoryId != null ? catName(t.categoryId) ?? '' : '';
     const note = [t.comment, t.starNote].filter(Boolean).join(' | ');
-    lines.push([t.txnDate, t.descriptor, t.instrument ?? '', amount, category, note].map(csvField).join(','));
-  }
+    return [t.txnDate, t.descriptor, t.instrument ?? '', amount, category, note];
+  });
+}
+
+export function transactionsToCsv(
+  txns: Transaction[],
+  catName: (id: number) => string | undefined,
+  splitsFor: (txnId: number) => TransactionSplit[] | undefined,
+): string {
+  const lines = [TXN_HEADER.join(',')];
+  for (const row of transactionRows(txns, catName, splitsFor)) lines.push(row.map(csvField).join(','));
   return lines.join('\r\n') + '\r\n';
+}
+
+const escHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/**
+ * The same columns as the CSV, as an HTML table (pastes as a real table into Word, Docs, email)
+ * plus tab-separated text (pastes into spreadsheets and plain-text fields).
+ */
+export function transactionsToClipboardTable(
+  txns: Transaction[],
+  catName: (id: number) => string | undefined,
+  splitsFor: (txnId: number) => TransactionSplit[] | undefined,
+): { html: string; text: string } {
+  const rows = transactionRows(txns, catName, splitsFor);
+  const cell = 'border:1px solid #999;padding:2px 6px';
+  const html = '<table style="border-collapse:collapse">'
+    + `<thead><tr>${TXN_HEADER.map((h) => `<th style="${cell};text-align:left">${h}</th>`).join('')}</tr></thead><tbody>`
+    + rows.map((r) => `<tr>${r.map((v, i) => `<td style="${cell}${i === 3 ? ';text-align:right' : ''}">${escHtml(v)}</td>`).join('')}</tr>`).join('')
+    + '</tbody></table>';
+  const text = [TXN_HEADER, ...rows].map((r) => r.map((v) => v.replace(/[\t\r\n]+/g, ' ')).join('\t')).join('\n');
+  return { html, text };
+}
+
+/** Put HTML + plain text on the clipboard. Uses a copy event, which carries both formats in every webview. */
+export function copyRichText(html: string, text: string): boolean {
+  const onCopy = (e: ClipboardEvent) => {
+    e.clipboardData?.setData('text/html', html);
+    e.clipboardData?.setData('text/plain', text);
+    e.preventDefault();
+  };
+  document.addEventListener('copy', onCopy);
+  try {
+    return document.execCommand('copy');
+  } finally {
+    document.removeEventListener('copy', onCopy);
+  }
 }
 
 /** Ask where to save, then write the CSV. Returns the saved path, or null if cancelled. */

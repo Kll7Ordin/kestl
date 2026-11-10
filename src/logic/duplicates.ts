@@ -1,4 +1,5 @@
 import { getData, type AppData, type Transaction } from '../db';
+import { parseDescriptor } from './suggest';
 
 function normalize(s: string): string {
   return s.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -26,6 +27,9 @@ function normalizeInstrument(instrument: string): string {
  *
  * PayPal-linked descriptors ("PayPal | <merchant> | ...") all share the same opening, so for those
  * the merchant segment is compared instead.
+ *
+ * Scotia also adds or drops a payment-processor prefix ("penna co" → "sp penna co.", "sq *kizuna"),
+ * so the cleaned merchant names (parseDescriptor: processor prefix and city removed) are compared too.
  */
 export function sameMerchant(a: string, b: string): boolean {
   const paypal = /^\s*paypal\s*\|\s*([^|]*)/i;
@@ -34,7 +38,9 @@ export function sameMerchant(a: string, b: string): boolean {
   const prefixMatch = (x: string, y: string) =>
     x === y || (Math.min(x.length, y.length) >= 6 && x.slice(0, 6) === y.slice(0, 6));
   const alnum = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-  return prefixMatch(normalize(a), normalize(b)) || prefixMatch(alnum(a), alnum(b));
+  if (prefixMatch(normalize(a), normalize(b)) || prefixMatch(alnum(a), alnum(b))) return true;
+  const ka = parseDescriptor(a).compact, kb = parseDescriptor(b).compact;
+  return ka.length >= 4 && kb.length >= 4 && prefixMatch(ka, kb);
 }
 
 function dateToMs(dateStr: string): number {
@@ -220,4 +226,28 @@ export function findExistingDuplicates(data: Pick<AppData, 'transactions' | 'tra
     }
   }
   return groups.sort((a, b) => (b.keep.txnDate > a.keep.txnDate ? 1 : b.keep.txnDate < a.keep.txnDate ? -1 : 0));
+}
+
+/**
+ * Remove the extra copies found by findExistingDuplicates, in place. The kept copy inherits a
+ * category, comment and star from the removed ones when it lacks them. Returns how many were removed.
+ */
+export function removeExistingDuplicates(data: Pick<AppData, 'transactions' | 'transactionSplits'>): number {
+  const groups = findExistingDuplicates(data);
+  const hasSplits = new Set(data.transactionSplits.map((s) => s.transactionId));
+  const remove = new Set<number>();
+  for (const { keep, extras } of groups) {
+    const withCat = extras.find((t) => t.categoryId != null);
+    if (keep.categoryId == null && !hasSplits.has(keep.id) && withCat) keep.categoryId = withCat.categoryId;
+    const comments = extras.map((t) => t.comment).filter((c): c is string => !!c && c !== keep.comment);
+    if (comments.length > 0) keep.comment = [keep.comment, ...comments].filter(Boolean).join(' ');
+    if (!keep.starred && extras.some((t) => t.starred)) keep.starred = true;
+    if (!keep.starNote) keep.starNote = extras.find((t) => t.starNote)?.starNote ?? keep.starNote;
+    for (const t of extras) remove.add(t.id);
+  }
+  if (remove.size > 0) {
+    data.transactions = data.transactions.filter((t) => !remove.has(t.id));
+    data.transactionSplits = data.transactionSplits.filter((s) => !remove.has(s.transactionId));
+  }
+  return remove.size;
 }

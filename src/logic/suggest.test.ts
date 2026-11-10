@@ -1,0 +1,91 @@
+import { describe, it, expect } from 'vitest';
+import { parseDescriptor, buildSuggester, isBankTransferDescriptor } from './suggest';
+import { makeTxn } from '../test/fixtures';
+
+describe('parseDescriptor', () => {
+  it.each([
+    ['thrifty foods #9457 Victoria Bc', 'thrifty foods'],
+    ['sp penna co. Victoria Bc', 'penna co'],
+    ['penna co Victoria Bc', 'penna co'],
+    ['sq *kizuna ramen 8774174551 Bc', 'kizuna ramen'],
+    ['act*saanich parks 2504755494 Bc', 'saanich parks'],
+    ['audible*gu1z48f23 Amzn.Com/Billnj', 'audible'],
+    ['pos purchase Gpos Red Barn Vanalm     Victo', 'red barn vanalm'],
+    ['pos purchase Fpos Hillside Pharmasave Victo', 'hillside pharmasave'],
+    ['pos purchase Natalies Nail Spa        Victo', 'natalies nail spa'],
+    ['withdrawal Free Interac E-Transfer', 'withdrawal free interac e transfer'],
+    ['customer transfer dr. Pc To 4537800409394688', 'customer transfer dr pc to acct4688'],
+    ['James RRSP', 'james rrsp'],
+    ['PayPal | eBay Commerce Canada Limited | Payment | Order Number: 06-1', 'ebay commerce limited'],
+  ])('%s → %s', (d, key) => {
+    expect(parseDescriptor(d).key).toBe(key);
+  });
+
+  it('marks marketplace products', () => {
+    const p = parseDescriptor('Amazon | Anker USB C Charger Block | #701-4740559-6767410');
+    expect(p.product).toBe(true);
+    expect(p.words).toContain('charger');
+  });
+
+  it('recognises bank transfers with no merchant', () => {
+    expect(isBankTransferDescriptor('withdrawal Free Interac E-Transfer')).toBe(true);
+    expect(isBankTransferDescriptor('pos purchase Gpos Red Barn')).toBe(false);
+    expect(isBankTransferDescriptor('thrifty foods Victoria Bc')).toBe(false);
+  });
+});
+
+describe('buildSuggester', () => {
+  const row = (descriptor: string, categoryId: number, amount = 20, txnDate = '2026-06-01') =>
+    makeTxn({ descriptor, categoryId, amount, txnDate });
+
+  it('matches the same merchant across city, store number and processor prefix changes', () => {
+    const s = buildSuggester([row('thrifty foods #123 Victoria Bc', 1), row('petro-canada 69903 Victoria Bc', 2)]);
+    expect(s.suggest('thrifty foods #9 Langley Bc', 30)?.categoryId).toBe(1);
+    expect(s.suggest('sp thrifty foods Victoria Bc', 30)?.categoryId).toBe(1);
+  });
+
+  it('does not match on the city alone', () => {
+    const s = buildSuggester([row('petro-canada Victoria Bc', 2), row('penny lane Victoria Bc', 2)]);
+    expect(s.suggest('penna co Victoria Bc', 300)).toBeNull();
+  });
+
+  it('uses the amount to tell apart repeat payments to the same payee', () => {
+    const corpus = [
+      ...[1, 2, 3].map((m) => row('withdrawal Free Interac E-Transfer', 10, 501, `2026-0${m}-01`)),
+      ...[1, 2, 3].map((m) => row('withdrawal Free Interac E-Transfer', 11, 75, `2026-0${m}-05`)),
+    ];
+    const s = buildSuggester(corpus);
+    expect(s.suggest('withdrawal Free Interac E-Transfer', 501)?.categoryId).toBe(10);
+    expect(s.suggest('withdrawal Free Interac E-Transfer', 75)?.categoryId).toBe(11);
+    expect(s.suggest('withdrawal Free Interac E-Transfer', 240)).toBeNull();
+  });
+
+  it('prefers the recent choice when a merchant moved category', () => {
+    const s = buildSuggester([
+      row('clean cuts barbarshop Victoria Bc', 1, 30, '2024-01-01'),
+      row('clean cuts barbarshop Victoria Bc', 1, 30, '2024-02-01'),
+      row('clean cuts barbarshop Victoria Bc', 2, 30, '2026-05-01'),
+      row('clean cuts barbarshop Victoria Bc', 2, 30, '2026-06-01'),
+    ]);
+    expect(s.suggest('clean cuts barbarshop Victoria Bc', 30)?.categoryId).toBe(2);
+  });
+
+  it('abstains when history is split', () => {
+    const s = buildSuggester([row('costco Victoria Bc', 1), row('costco Victoria Bc', 2)]);
+    expect(s.suggest('costco Victoria Bc', 50)).toBeNull();
+  });
+
+  it('never matches an Amazon product to a merchant by name prefix', () => {
+    const s = buildSuggester([row('amazon.ca Amzn.Com/Bill', 5), row('amazon.ca Amzn.Com/Bill', 5)]);
+    expect(s.suggest('Amazon | Kids Toothbrush Heads | #701-1', 15)).toBeNull();
+  });
+
+  it('falls back to how the household files the same kind of business', () => {
+    const corpus = [row('siam thai Victoria Bc', 7), row('pizza garden Victoria Bc', 7), row('kizuna ramen Victoria Bc', 7), row('red barn Victoria Bc', 3)];
+    const merchantTypes = { 'siam thai': 'restaurant', 'pizza garden': 'restaurant', 'kizuna ramen': 'restaurant', 'tonollis deli': 'restaurant', 'red barn': 'grocery store' };
+    expect(buildSuggester(corpus).suggest('tonollis deli Sidney Bc', 40)).toBeNull();
+    const g = buildSuggester(corpus, { merchantTypes }).suggest('tonollis deli Sidney Bc', 40);
+    expect(g?.categoryId).toBe(7);
+    expect(g?.reason).toMatch(/restaurant/);
+  });
+});

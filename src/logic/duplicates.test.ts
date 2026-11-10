@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { __setDataForTests } from '../db';
-import { detectDuplicates, sameMerchant, findExistingDuplicates } from './duplicates';
+import { detectDuplicates, sameMerchant, findExistingDuplicates, removeExistingDuplicates } from './duplicates';
 import { emptyFixture, makeTxn } from '../test/fixtures';
 
 const strip = ({ id: _id, ...rest }: ReturnType<typeof makeTxn>) => rest;
@@ -72,6 +72,15 @@ describe('merchant renamed between exports', () => {
     expect(sameMerchant('sp ca-keenfootwear Brampton On', 'sp vessi-footwear-ca Vancouver Bc')).toBe(false);
   });
 
+  it('sameMerchant ignores an added or dropped payment-processor prefix', () => {
+    expect(sameMerchant('penna co Victoria Bc', 'sp penna co. Victoria Bc')).toBe(true);
+    expect(sameMerchant('podium imports Penticton Bc', 'sp podium imports Penticton Bc')).toBe(true);
+    expect(sameMerchant('habit coffee Victoria Bc', 'sq *habit coffee Victoria Bc')).toBe(true);
+    expect(sameMerchant('camp steam 519-870-8762 On', 'bam*camp steam 519-870-8762 On')).toBe(true);
+    expect(sameMerchant('saanich parks 2504755494 Bc', 'act*saanich parks 2504755494 Bc')).toBe(true);
+    expect(sameMerchant('sp penna co. Victoria Bc', 'sp podium imports Penticton Bc')).toBe(false);
+  });
+
   it('flags a re-export where Scotia renamed the merchant', () => {
     const d = emptyFixture();
     d.transactions = [makeTxn({ id: 1, txnDate: '2026-09-15', descriptor: 'old navy 800-427-7895 On', amount: -31.35 })];
@@ -122,5 +131,21 @@ describe('findExistingDuplicates — real repeats are not duplicates', () => {
   it('compares the merchant segment of PayPal-linked descriptors', () => {
     expect(sameMerchant('PayPal | eBay Commerce Canada Limited | Payment', 'PayPal | Hierhebikpijn.nl B.V. | Automatic Payment')).toBe(false);
     expect(sameMerchant('PayPal | checkdomain GmbH | Automatic Payment', 'PayPal | checkdomain GmbH | Automatic Payment')).toBe(true);
+  });
+});
+
+describe('removeExistingDuplicates', () => {
+  it('removes renamed copies from overlapping statements and keeps the categorized one', () => {
+    const d = emptyFixture();
+    d.transactions = [
+      makeTxn({ id: 1, txnDate: '2026-09-20', descriptor: 'sp penna co. Victoria Bc', amount: 304.64, sourceRef: 'a.csv' }),
+      makeTxn({ id: 2, txnDate: '2026-09-20', descriptor: 'penna co Victoria Bc', amount: 304.64, sourceRef: 'b.csv', categoryId: 4, comment: 'gift' }),
+      // Same file: two real e-transfers, kept.
+      makeTxn({ id: 3, txnDate: '2026-09-11', descriptor: 'deposit Free Interac E-Transfer', amount: -84, sourceRef: 'c.csv' }),
+      makeTxn({ id: 4, txnDate: '2026-09-11', descriptor: 'deposit Free Interac E-Transfer', amount: -84, sourceRef: 'c.csv' }),
+    ];
+    expect(removeExistingDuplicates(d)).toBe(1);
+    expect(d.transactions.map((t) => t.id)).toEqual([2, 3, 4]);
+    expect(d.transactions[0].comment).toBe('gift');
   });
 });
