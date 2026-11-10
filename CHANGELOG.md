@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.10.0](https://github.com/Kll7Ordin/kestl/compare/v2.9.0...v2.10.0) (2026-11-10)
+
+
+### Features
+
+* **suggestions:** better category guesses, copy-as-table, one-time duplicate cleanup ([0e9a270](https://github.com/Kll7Ordin/kestl/commit/0e9a270a6d65f430f68b349ce90b556d81a0ac81))
+
 ## [2.9.0](https://github.com/Kll7Ordin/kestl/compare/v2.8.0...v2.9.0) (2026-11-09)
 
 
