@@ -12,7 +12,12 @@ export interface BudgetRow {
   ytd: number;
   ytdTarget: number;
   ytdDiff: number;
-  ytdAvgDiff: number;
+  /** Avg monthly spend over the last 12 tracked months (current excluded) minus this month's target. */
+  avgDiff12: number;
+  avgMonthCount12: number;
+  /** Same over the last 3 months. */
+  avgDiff3: number;
+  avgMonthCount3: number;
   /** Rollover carried in from previous months (0 when rollover is off). Available = target + carry. */
   carry: number;
   relevantMonthCount: number;
@@ -53,6 +58,19 @@ export function buildRows(month: string, categories: Category[], _budgetGroups: 
   const incomplete = new Set(d.incompleteMonths ?? []);
   for (let i = priorMonths.length - 1; i >= 0; i--) if (incomplete.has(priorMonths[i])) priorMonths.splice(i, 1);
 
+  // The N calendar months before this one (ignores the YTD/rolling setting)
+  const lastMonths = (n: number) => {
+    const out: string[] = [];
+    for (let i = n; i >= 1; i--) {
+      const pd = new Date(yearNum, monthNum - 1 - i, 1);
+      const key = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`;
+      if (!incomplete.has(key)) out.push(key);
+    }
+    return out;
+  };
+  const avgWindow12 = lastMonths(12);
+  const avgWindow3 = lastMonths(3);
+
   const aggs = getMonthAggregates(d);
   const cur = aggs.get(month);
   const spendByCategory = cur?.debitByCat ?? new Map<number, number>();
@@ -90,7 +108,22 @@ export function buildRows(month: string, categories: Category[], _budgetGroups: 
     const ytdTarget = relevantPriorMonths.reduce((s, pm) => s + (catBudgetByMonth.get(pm) ?? 0), 0);
     const ytdDiff = ytd - ytdTarget;
     const relevantMonthCount = relevantPriorMonths.length;
-    const ytdAvgDiff = relevantMonthCount > 0 ? ytdDiff / relevantMonthCount : 0;
+
+    // Avg ±/mo: average net spend over the last N tracked months (current month excluded),
+    // measured against THIS month's target so editing the target moves it right away.
+    const avgDiff = (window: string[]) => {
+      const used = window.filter((pm) => monthsWithTxns.has(pm) && catBudgetByMonth.has(pm));
+      let spent = 0;
+      for (const pm of used) {
+        const a = aggs.get(pm);
+        const debit = a?.debitByCat.get(b.categoryId) ?? 0;
+        const credit = a?.creditByCat.get(b.categoryId) ?? 0;
+        spent += isIncome ? credit : debit - credit;
+      }
+      return { diff: used.length > 0 ? spent / used.length - b.targetAmount : 0, count: used.length };
+    };
+    const a12 = avgDiff(avgWindow12);
+    const a3 = avgDiff(avgWindow3);
 
     return {
       categoryId: b.categoryId,
@@ -100,7 +133,9 @@ export function buildRows(month: string, categories: Category[], _budgetGroups: 
       target: b.targetAmount,
       spent: isIncome ? credits : grossSpent - credits,
       carry: isIncome ? 0 : getRolloverCarry(d, b.categoryId, month),
-      ytd, ytdTarget, ytdDiff, ytdAvgDiff, relevantMonthCount, isIncome,
+      ytd, ytdTarget, ytdDiff, relevantMonthCount, isIncome,
+      avgDiff12: a12.diff, avgMonthCount12: a12.count,
+      avgDiff3: a3.diff, avgMonthCount3: a3.count,
       groupId: b.groupId ?? null,
       sortOrder: (b as { sortOrder?: number }).sortOrder ?? 0,
     };
