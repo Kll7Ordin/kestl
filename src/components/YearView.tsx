@@ -90,7 +90,8 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   })();
-  const isCompleted = (m: string) => m < todayMonth;
+  const incompleteSet = new Set(appData.incompleteMonths ?? []);
+  const isCompleted = (m: string) => m < todayMonth && !incompleteSet.has(m);
 
   // Determine if selected cats are savings (occasional) categories
   const spendFromSavingsGroupIds2 = new Set(
@@ -110,7 +111,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
 
   // Cap planned: only show through the last month with actual data
   const cappedPlanned = data.map((d, i) => {
-    if (i > lastDataIdx) return null;
+    if (i > lastDataIdx || d.incomplete) return null;
     return d.planned;
   });
 
@@ -118,7 +119,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
     const { budgets: allBudgets, transactions: allTxns, transactionSplits: allSplits, budgetGroups } = appData;
 
     const months = pieScope === 'ytd'
-      ? (ytdMode === 'rolling12' ? rollingTwelveMonths().filter((m) => m < todayMonth) : monthsOfYear(year).filter((m) => m < todayMonth))
+      ? (ytdMode === 'rolling12' ? rollingTwelveMonths().filter((m) => m < todayMonth && !incompleteSet.has(m)) : monthsOfYear(year).filter((m) => m < todayMonth && !incompleteSet.has(m)))
       : [piePeriod];
     const monthSet = new Set(months);
     if (monthSet.size === 0) return { labels: [] as string[], values: [] as number[], colors: [] as string[] };

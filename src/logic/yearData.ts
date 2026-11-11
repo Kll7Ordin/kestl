@@ -28,6 +28,8 @@ export interface MonthData {
   actual: number;
   income: number;
   savings: number; // Occasional group spending
+  /** User marked this month incomplete; it is left out of charts and totals. */
+  incomplete?: boolean;
 }
 
 
@@ -69,7 +71,9 @@ export function computeYearData(appData: AppData, opts: YearDataOpts): MonthData
       allBudgets.filter((b) => b.groupId != null && spendFromSavingsGroupIds.has(b.groupId)).map((b) => b.categoryId)
     );
 
+    const incompleteSet = new Set(appData.incompleteMonths ?? []);
     return months.map((m) => {
+      if (incompleteSet.has(m)) return { month: m, planned: 0, actual: 0, income: 0, savings: 0, incomplete: true };
       const mBudgets = allBudgets.filter((b) =>
         b.month === m && (!filterCats || filterCats.has(b.categoryId))
       );

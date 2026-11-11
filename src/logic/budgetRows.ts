@@ -50,6 +50,9 @@ export function buildRows(month: string, categories: Category[], _budgetGroups: 
     }
   }
 
+  const incomplete = new Set(d.incompleteMonths ?? []);
+  for (let i = priorMonths.length - 1; i >= 0; i--) if (incomplete.has(priorMonths[i])) priorMonths.splice(i, 1);
+
   const aggs = getMonthAggregates(d);
   const cur = aggs.get(month);
   const spendByCategory = cur?.debitByCat ?? new Map<number, number>();

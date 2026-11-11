@@ -265,6 +265,8 @@ export interface AppData {
   mortgageLedger?: MortgageLedgerEntry[];
   mergeLogs?: MergeLog[];
   backupSettings?: BackupSettings;
+  /** YYYY-MM months the user marked incomplete; left out of YTD / 12M / Year View totals. */
+  incompleteMonths?: string[];
 }
 
 export interface ColorThresholds {
@@ -1115,6 +1117,18 @@ export async function setCategoryExcludeFromOffBudget(id: number, on: boolean): 
   pushUndoSnapshot(on ? 'Exclude from off-budget total' : 'Include in off-budget total');
   const cat = data.categories.find((c) => c.id === id);
   if (cat) { cat.excludeFromOffBudget = on || undefined; await persist(); }
+}
+
+export function isMonthIncomplete(month: string): boolean {
+  return (data.incompleteMonths ?? []).includes(month);
+}
+
+export async function setMonthIncomplete(month: string, incomplete: boolean): Promise<void> {
+  pushUndoSnapshot(incomplete ? 'Mark month incomplete' : 'Mark month complete');
+  const set = new Set(data.incompleteMonths ?? []);
+  if (incomplete) set.add(month); else set.delete(month);
+  data.incompleteMonths = [...set].sort();
+  await persist();
 }
 
 export async function setCategoryArchived(id: number, archived: boolean): Promise<void> {

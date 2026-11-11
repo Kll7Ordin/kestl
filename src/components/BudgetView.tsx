@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { flushSync, createPortal } from 'react-dom';
-import { getData, subscribe, upsertBudget, deleteBudget, updateBudgetNote, addBudgetGroup, updateBudgetGroup, deleteBudgetGroup, reorderBudgetsInGroup, addCategory, updateCategoryNote, updateCategoryName, updateCategoryIsIncome, withUndo, getColorThresholds, copyBudgetToMonths, getDisplaySettings, updateDisplaySettings, type ColorThresholds, type Category, type BudgetGroup, type ExperimentalBudget } from '../db';
+import { getData, subscribe, upsertBudget, deleteBudget, updateBudgetNote, addBudgetGroup, updateBudgetGroup, deleteBudgetGroup, reorderBudgetsInGroup, addCategory, updateCategoryNote, updateCategoryName, updateCategoryIsIncome, withUndo, getColorThresholds, copyBudgetToMonths, getDisplaySettings, updateDisplaySettings, setMonthIncomplete, type ColorThresholds, type Category, type BudgetGroup, type ExperimentalBudget } from '../db';
 import { ImportBudgetCard } from './ImportBudgetCard';
 import { SearchableSelect } from './SearchableSelect';
 import { monthLabel } from '../logic/dateUtils';
@@ -562,6 +562,17 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
             setMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
           }}>›</button>
         </div>
+        <label
+          style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', cursor: 'pointer' }}
+          title="Leave this month out of YTD, 12M and Year View totals"
+        >
+          <input
+            type="checkbox"
+            checked={(getData().incompleteMonths ?? []).includes(month)}
+            onChange={(e) => { void setMonthIncomplete(month, e.target.checked); }}
+          />
+          Incomplete month
+        </label>
       </div>
 
       {/* Import Budget — shown only when no budget has been set yet */}
