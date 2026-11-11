@@ -68,7 +68,12 @@ export function amazonPaymentKey(t: Pick<Transaction, 'sourceRef' | 'txnDate' | 
   return `${t.sourceRef}|${t.originalTxnDate ?? t.txnDate}|${t.amount.toFixed(2)}|${isCredit(t) ? 'refund' : 'charge'}`;
 }
 
+/** Comment on a charge line paid from an Amazon gift card balance. */
+export const GIFT_CARD_NOTE = 'Paid by Amazon gift card';
+const isGiftCardCharge = (t: Transaction) => (t.comment ?? '').startsWith(GIFT_CARD_NOTE);
+
 const money = (n: number) => `$${n.toFixed(2)}`;
+const cents = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * Amazon transactions that are missing their other half or don't add up. Computed fresh each
@@ -154,12 +159,18 @@ export function computeAmazonFlags(
       continue;
     }
 
-    const charged = Math.round((charges.get(t.sourceRef) ?? []).reduce((s, c) => s + c.amount, 0) * 100) / 100;
-    if (o.amount > 0 && Math.abs(charged - o.amount) > 0.01 && isCovered(coverage?.payments, o.orderDate, 0, CHARGE_LAG_DAYS)) {
+    // The orders page total leaves out whatever a gift card paid, so either sum can match it.
+    const orderCharges = charges.get(t.sourceRef) ?? [];
+    const charged = cents(orderCharges.reduce((s, c) => s + c.amount, 0));
+    const chargedToCard = cents(orderCharges.filter((c) => !isGiftCardCharge(c)).reduce((s, c) => s + c.amount, 0));
+    const matches = Math.abs(charged - o.amount) <= 0.01 || Math.abs(chargedToCard - o.amount) <= 0.01;
+    if (o.amount > 0 && !matches && isCovered(coverage?.payments, o.orderDate, 0, CHARGE_LAG_DAYS)) {
       flags.set(t.id, {
-        label: `Charged ${money(charged)} of ${money(o.amount)}`,
-        detail: `This order's charges add up to ${money(charged)} but the order total is ${money(o.amount)}. `
-          + 'A gift card or points may have covered the rest, or a charge is outside the pasted dates.',
+        label: `Orders page says ${money(o.amount)}, charged ${money(charged)}`,
+        detail: `The orders page says this order cost ${money(o.amount)}, but its charges on the transactions page add up to ${money(charged)}. `
+          + (charged < o.amount
+            ? 'Points may have covered the rest, or a charge falls outside the pasted dates.'
+            : 'An extra charge may belong to another order, or the order total changed after it was placed.'),
       });
     }
   }
