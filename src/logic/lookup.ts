@@ -234,25 +234,31 @@ function categoryPrompt(
     lines.push(`- Other "${r.merchantType}" merchants (${report.category.typePeers}) are filed as: ${report.category.typeShares.slice(0, 4).map((s) => `${name(s.categoryId)} ${pct(s.share)}`).join(', ')}`);
   }
   lines.push(`- The app's own history guess: ${trace.guess ? `${name(trace.guess.categoryId)} (${pct(trace.guess.confidence)})` : 'none'}`);
-  lines.push('', 'Categories (use the number):', ...ctx.categories.map((c) => `${c.id}: ${c.name}`));
-  lines.push('', `Return:
-- categoryId: the best category's number, or 0 if none fits or you can't tell.
+  lines.push('', 'Categories:', ...ctx.categories.map((c) => `- ${c.name}`));
+  lines.push('', `Return, in this order:
+- reason: two or three sentences weighing the evidence. If history and the kind of business point different ways, say so.
+- category: the category your reason points to, written exactly as in the list above, or "${NO_CATEGORY}" if none fits or you can't tell.
 - confidence: high, medium or low.
-- reason: two or three sentences on which evidence decided it. If history and the kind of business point different ways, say so.
 - unresolved: anything that would change the answer that you couldn't determine. Empty if none.`);
   return lines.join('\n');
 }
 
-function categorySchema(ids: number[]) {
+const NO_CATEGORY = 'none';
+
+/**
+ * The reason comes first so the model reasons before it commits (constrained decoding writes the
+ * properties in order), and it picks by name: small models pick a mismatched number far more often.
+ */
+function categorySchema(names: string[]) {
   return {
     type: 'object',
     properties: {
-      categoryId: { type: 'integer', enum: [0, ...ids] },
-      confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
       reason: { type: 'string' },
+      category: { type: 'string', enum: [...new Set(names), NO_CATEGORY] },
+      confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
       unresolved: { type: 'array', items: { type: 'string' } },
     },
-    required: ['categoryId', 'confidence', 'reason', 'unresolved'],
+    required: ['reason', 'category', 'confidence', 'unresolved'],
   };
 }
 
@@ -394,10 +400,10 @@ export async function runLookup(
   report.category = { ...report.category, status: 'running' };
   emit();
   try {
-    const ids = ctx.categories.map((c) => c.id);
-    const out = await deps.chat(CATEGORY_SYSTEM, categoryPrompt(input, trace, report, ctx, name), categorySchema(ids)) as Record<string, unknown>;
-    const id = Number(out.categoryId);
-    const valid = catName.has(id);
+    const out = await deps.chat(CATEGORY_SYSTEM, categoryPrompt(input, trace, report, ctx, name), categorySchema(ctx.categories.map((c) => c.name))) as Record<string, unknown>;
+    const picked = str(out.category).trim().toLowerCase();
+    const id = ctx.categories.find((c) => c.name.trim().toLowerCase() === picked)?.id ?? null;
+    const valid = id != null;
     report.category = {
       ...report.category,
       status: 'done',

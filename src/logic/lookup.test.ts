@@ -29,7 +29,7 @@ function fakeDeps(over: Partial<LookupDeps> = {}): LookupDeps & { prompts: strin
       const props = (schema as { properties: Record<string, unknown> }).properties;
       if ('queries' in props) return { businessName: 'Kizuna Ramen', location: 'Victoria, BC', queries: ['Kizuna Ramen Victoria BC 8774174551', 'Kizuna Ramen'], reasoning: 'sq * is Square.' };
       if ('merchantType' in props) return { merchantName: 'Kizuna Ramen', whatTheySell: 'A ramen restaurant.', relevantResults: [1, 9], resultNotes: 'Result 2 is recipes.', merchantType: 'restaurant', typeConfidence: 'high', typeReason: 'Result 1 says restaurant.', chargeNote: 'A meal for two.', unresolved: [] };
-      return { categoryId: 2, confidence: 'high', reason: 'Restaurants go to Eating Out.', unresolved: ['whether this was takeout'] };
+      return { reason: 'Restaurants go to Eating Out.', category: 'Eating Out', confidence: 'high', unresolved: ['whether this was takeout'] };
     },
     ...over,
   };
@@ -80,7 +80,7 @@ describe('runLookup', () => {
         const props = (schema as { properties: Record<string, unknown> }).properties;
         if ('queries' in props) throw new Error('model not found');
         if ('merchantType' in props) return { merchantName: '', whatTheySell: '', relevantResults: [], resultNotes: '', merchantType: 'nonsense', typeConfidence: 'x', typeReason: '', chargeNote: '', unresolved: ['which business this is'] };
-        return { categoryId: 0, confidence: 'low', reason: 'Not enough to go on.', unresolved: [] };
+        return { reason: 'Not enough to go on.', category: 'none', confidence: 'low', unresolved: [] };
       },
     });
     const r = await runLookup(input, ctx, deps);
@@ -112,13 +112,13 @@ describe('runLookup', () => {
     expect(deps.prompts.some((p) => p.includes('product title: "Anker USB C Charger"'))).toBe(true);
   });
 
-  it('rejects category ids that are not on the list', async () => {
+  it('rejects categories that are not on the list', async () => {
     const deps = fakeDeps({
       chat: async (_s, _u, schema) => {
         const props = (schema as { properties: Record<string, unknown> }).properties;
         if ('queries' in props) return { businessName: '', location: '', queries: ['x y'], reasoning: '' };
         if ('merchantType' in props) return { merchantType: 'restaurant', typeConfidence: 'medium' };
-        return { categoryId: 999, confidence: 'high', reason: 'r', unresolved: [] };
+        return { reason: 'r', category: 'ChatGPT', confidence: 'high', unresolved: [] };
       },
     });
     const r = await runLookup(input, ctx, deps);
