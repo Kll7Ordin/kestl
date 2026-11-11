@@ -236,14 +236,16 @@ function categoryPrompt(
   lines.push(`- The app's own history guess: ${trace.guess ? `${name(trace.guess.categoryId)} (${pct(trace.guess.confidence)})` : 'none'}`);
   lines.push('', 'Categories:', ...ctx.categories.map((c) => `- ${c.name}`));
   lines.push('', `Return, in this order:
-- reason: two or three sentences weighing the evidence. If history and the kind of business point different ways, say so.
-- category: the category your reason points to, written exactly as in the list above, or "${NO_CATEGORY}" if none fits or you can't tell.
+- reason: two or three sentences weighing the evidence. If history and the kind of business point different ways, say so. Name the category you choose, exactly as in the list.
+- category: the category your reason names, written exactly as in the list above, or "${NO_CATEGORY}" if none fits or you can't tell.
 - confidence: high, medium or low.
 - unresolved: anything that would change the answer that you couldn't determine. Empty if none.`);
   return lines.join('\n');
 }
 
 const NO_CATEGORY = 'none';
+
+const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
 
 /**
  * The reason comes first so the model reasons before it commits (constrained decoding writes the
@@ -403,15 +405,21 @@ export async function runLookup(
     const out = await deps.chat(CATEGORY_SYSTEM, categoryPrompt(input, trace, report, ctx, name), categorySchema(ctx.categories.map((c) => c.name))) as Record<string, unknown>;
     const picked = str(out.category).trim().toLowerCase();
     const id = ctx.categories.find((c) => c.name.trim().toLowerCase() === picked)?.id ?? null;
-    const valid = id != null;
+    const reason = str(out.reason);
+    // Small models sometimes reason toward one thing and then pick another. An answer whose reason
+    // never names its category isn't trusted, so it doesn't become a suggestion chip.
+    const agrees = id != null && norm(reason).includes(norm(picked));
+    const valid = id != null && agrees;
     report.category = {
       ...report.category,
       status: 'done',
       categoryId: valid ? id : null,
       confidence: valid ? conf(out.confidence) ?? 'low' : undefined,
-      reason: str(out.reason) || undefined,
+      reason: reason || undefined,
       unresolved: strList(out.unresolved),
-      note: valid ? undefined : 'The AI didn\'t settle on a category.',
+      note: valid ? undefined
+        : id != null ? `The AI picked ${name(id)}, but its reasoning doesn't support it, so it wasn't used.`
+        : 'The AI didn\'t settle on a category.',
     };
   } catch (e) {
     report.category = { ...report.category, status: 'failed', categoryId: null, note: `The AI couldn't pick a category (${errText(e)}).` };

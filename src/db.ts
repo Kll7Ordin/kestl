@@ -1048,6 +1048,29 @@ export async function startupCleanup(): Promise<CleanupResult[]> {
     return n;
   });
 
+  // 18. Saved ? lookups whose AI reason never names the category it picked (same check runLookup
+  // now makes): drop the pick so it stops showing as a suggestion chip. The reason stays readable.
+  migrate(results, 'dropLookupPicksReasonDoesNotName', () => {
+    if (!data.merchantLookups) return 0;
+    const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+    let n = 0;
+    for (const r of Object.values(data.merchantLookups)) {
+      const id = r.category.categoryId;
+      if (id == null) continue;
+      const name = data.categories.find((c) => c.id === id)?.name;
+      if (name && norm(r.category.reason ?? '').includes(norm(name))) continue;
+      r.category = {
+        ...r.category,
+        categoryId: null,
+        confidence: undefined,
+        note: `The AI picked ${name ?? 'a category'}, but its reasoning doesn't support it, so it wasn't used.`,
+      };
+      n++;
+    }
+    if (n > 0) data.merchantLookups = { ...data.merchantLookups };
+    return n;
+  });
+
   // 13. (every launch) backfill category colors for categories that don't have one yet
   for (const c of data.categories) {
     if (!c.color) { c.color = pickDistinctColor(data.categories); colorized++; }

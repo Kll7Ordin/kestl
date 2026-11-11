@@ -124,4 +124,21 @@ describe('runLookup', () => {
     const r = await runLookup(input, ctx, deps);
     expect(r.category.categoryId).toBeNull();
   });
+
+  it("drops a pick its own reason doesn't name", async () => {
+    const answer = (reason: string) => fakeDeps({
+      chat: async (_s, _u, schema) => {
+        const props = (schema as { properties: Record<string, unknown> }).properties;
+        if ('queries' in props) return { businessName: '', location: '', queries: ['x y'], reasoning: '' };
+        if ('merchantType' in props) return { merchantType: 'restaurant', typeConfidence: 'medium' };
+        return { reason, category: 'Eating Out', confidence: 'high', unresolved: [] };
+      },
+    });
+    const off = await runLookup(input, ctx, answer('A bar, so likely groceries for alcohol.'));
+    expect(off.category.categoryId).toBeNull();
+    expect(off.category.note).toMatch(/doesn't support/);
+
+    const on = await runLookup(input, ctx, answer('A ramen shop, which this household files under eating out.'));
+    expect(on.category.categoryId).not.toBeNull();
+  });
 });
