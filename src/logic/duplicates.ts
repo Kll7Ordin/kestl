@@ -35,12 +35,57 @@ export function sameMerchant(a: string, b: string): boolean {
   const paypal = /^\s*paypal\s*\|\s*([^|]*)/i;
   const pa = a.match(paypal), pb = b.match(paypal);
   if (pa && pb) return sameMerchant(pa[1], pb[1]);
+  // A PayPal debit imported once linked to its order ("PayPal | Google | ...") and once plain
+  // ("miscellaneous payment Paypal").
+  if ((pa && /paypal/i.test(b)) || (pb && /paypal/i.test(a))) return true;
   const prefixMatch = (x: string, y: string) =>
     x === y || (Math.min(x.length, y.length) >= 6 && x.slice(0, 6) === y.slice(0, 6));
   const alnum = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
   if (prefixMatch(normalize(a), normalize(b)) || prefixMatch(alnum(a), alnum(b))) return true;
   const ka = parseDescriptor(a).compact, kb = parseDescriptor(b).compact;
-  return ka.length >= 4 && kb.length >= 4 && prefixMatch(ka, kb);
+  if (ka.length >= 4 && kb.length >= 4 && prefixMatch(ka, kb)) return true;
+  return sameMerchantWords(merchantWords(a), merchantWords(b));
+}
+
+/**
+ * Leading prefixes Scotia adds or drops between exports: payment processors ("tst-citrus",
+ * "sq *habit"), cross-border checkouts ("global-e /thursday boots") and web addresses ("www.dazn.com").
+ */
+const EXPORT_PREFIX = /^(?:(?:tst|sq|sp|act|bam|global-e)\s*[-*/]\s*|(?:sp|sq|tst)\s+|www\.)/;
+
+/** Merchant name as words, with export prefixes, punctuation and a leading "the" removed. */
+function merchantWords(desc: string): string[] {
+  let s = normalize(desc);
+  for (let i = 0; i < 2; i++) s = s.replace(EXPORT_PREFIX, '');
+  const words = s.replace(/[&']/g, '').split(/[^a-z0-9]+/).filter(Boolean);
+  if (words[0] === 'the' && words.length > 1) words.shift();
+  return words;
+}
+
+/** Is `short` the letters of `long` with some dropped ("gofndme" in "gofundme")? */
+function isAbbreviation(short: string, long: string): boolean {
+  if (short.length < 5 || short[0] !== long[0]) return false;
+  let i = 0;
+  for (const ch of long) if (ch === short[i]) i++;
+  return i === short.length;
+}
+
+/**
+ * Looser checks on the merchant's first word, only ever applied to charges already on the same card,
+ * day and amount: "sdm" / "sdm 269", "ebay" / "ebay o*06-15196", "h&m" / "hm hennes mauritz",
+ * "ikea" / "ikea.ca online", "bc ferries" / "bcf - coastal renaissance", "gofundme" / "gofndme*".
+ */
+function sameMerchantWords(a: string[], b: string[]): boolean {
+  if (a.length === 0 || b.length === 0) return false;
+  const [x, y] = [a[0], b[0]];
+  if (x === y) return x.length >= 2;
+  const compact = (w: string[]) => w.join('');
+  const ca = compact(a), cb = compact(b);
+  if (Math.min(ca.length, cb.length) >= 6 && ca.slice(0, 6) === cb.slice(0, 6)) return true;
+  // First word is the other's first word plus its next word's initial ("bcf" = "bc" + "f"erries).
+  const initials = (head: string, w: string[]) => w.length > 1 && head.length >= 3 && head === w[0] + w[1][0];
+  if (initials(x, b) || initials(y, a)) return true;
+  return x.length < y.length ? isAbbreviation(x, y) : isAbbreviation(y, x);
 }
 
 function dateToMs(dateStr: string): number {
@@ -135,42 +180,57 @@ export function detectDuplicates(incoming: Omit<Transaction, 'id'>[]): Duplicate
     return true;
   }
 
-  const duplicates: Omit<Transaction, 'id'>[] = [];
-  const unique: Omit<Transaction, 'id'>[] = [];
+  // Two passes: exact matches first, so a looser merchant match can't take an existing row that a
+  // later incoming row matches exactly (two ferry tickets, same price, same day, different terminals).
+  const isDup = new Array<boolean>(incoming.length).fill(false);
+  const consumeCardEntry = (txn: Omit<Transaction, 'id'>) => {
+    const ms = dateToMs(txn.originalTxnDate ?? txn.txnDate);
+    const inst = normalizeInstrument(txn.instrument ?? '');
+    const desc = normalize(txn.descriptor);
+    const i = remainingCardEntries.findIndex((e) => e.amount === txn.amount && e.instrument === inst && e.dateMs === ms && e.desc === desc);
+    if (i >= 0) remainingCardEntries.splice(i, 1);
+  };
 
-  for (const txn of incoming) {
+  incoming.forEach((txn, idx) => {
     const txnDedupDate = txn.originalTxnDate ?? txn.txnDate;
     const descKey = `${txnDedupDate}|${normalize(txn.descriptor)}|${txn.amount}`;
     const srcKey = `${txnDedupDate}|${txn.sourceRef}|${txn.amount}`;
-    const incomingNorm = normalize(txn.descriptor);
-    const daKey = `${txnDedupDate}|${txn.amount}`;
-    const existingDescs = dateAmountToDescs.get(daKey) ?? [];
-
+    const existingDescs = dateAmountToDescs.get(`${txnDedupDate}|${txn.amount}`) ?? [];
     const descCount = descKeyCounts.get(descKey) ?? 0;
     const srcCount = sourceKeyCounts.get(srcKey) ?? 0;
+    if (descCount > 0) {
+      descKeyCounts.set(descKey, descCount - 1);
+      // Also remove from the looser pools so they don't count the same entry twice.
+      const dIdx = existingDescs.indexOf(normalize(txn.descriptor));
+      if (dIdx >= 0) existingDescs.splice(dIdx, 1);
+      consumeCardEntry(txn);
+      isDup[idx] = true;
+    } else if (srcCount > 0) {
+      sourceKeyCounts.set(srcKey, srcCount - 1);
+      isDup[idx] = true;
+    }
+  });
+
+  incoming.forEach((txn, idx) => {
+    if (isDup[idx]) return;
+    const txnDedupDate = txn.originalTxnDate ?? txn.txnDate;
+    const incomingNorm = normalize(txn.descriptor);
+    const existingDescs = dateAmountToDescs.get(`${txnDedupDate}|${txn.amount}`) ?? [];
+    if (consumePendingCaptureDup(txn)) {
+      isDup[idx] = true;
+      return;
+    }
     const prefixIdx = existingDescs.findIndex(
       (d) => d.length >= 8 && (d.startsWith(incomingNorm) || incomingNorm.startsWith(d)),
     );
-
-    if (descCount > 0) {
-      descKeyCounts.set(descKey, descCount - 1);
-      // Also remove from dateAmountToDescs so prefix dedup doesn't double-count the same entry
-      const dIdx = existingDescs.indexOf(incomingNorm);
-      if (dIdx >= 0) existingDescs.splice(dIdx, 1);
-      duplicates.push(txn);
-    } else if (srcCount > 0) {
-      sourceKeyCounts.set(srcKey, srcCount - 1);
-      duplicates.push(txn);
-    } else if (consumePendingCaptureDup(txn)) {
-      duplicates.push(txn);
-    } else if (prefixIdx >= 0) {
+    if (prefixIdx >= 0) {
       existingDescs.splice(prefixIdx, 1);
-      duplicates.push(txn);
-    } else {
-      unique.push(txn);
+      isDup[idx] = true;
     }
-  }
+  });
 
+  const duplicates = incoming.filter((_, i) => isDup[i]);
+  const unique = incoming.filter((_, i) => !isDup[i]);
   return { duplicates, unique };
 }
 

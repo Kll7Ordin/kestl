@@ -81,6 +81,39 @@ describe('merchant renamed between exports', () => {
     expect(sameMerchant('sp penna co. Victoria Bc', 'sp podium imports Penticton Bc')).toBe(false);
   });
 
+  it('sameMerchant handles the other renames Scotia makes between exports', () => {
+    const same: [string, string][] = [
+      ['citrus Victoria Bc', 'tst-citrus  cane Victoria Bc'],
+      ['thursday boots Vancouver Bc', 'global-e /thursday boots Vancouver Bc'],
+      ['dazn Dazn.Com', 'www.dazn.com Dazn.Com'],
+      ['sport chek Oakville On', 'www.sportchek.ca Oakville On'],
+      ['sdm Victoria Bc', 'sdm 269 Victoria Bc'],
+      ['dsw Victoria Bc', 'dsw #590'],
+      ['ebay Toronto On', 'ebay o*04-15243-87246 Toronto On'],
+      ['h&m Toronto On', 'hm hennes  mauritz inc. Toronto On'],
+      ['ikea Burlington On', 'ikea.ca online Burlington On'],
+      ['bc ferries Victoria Bc', 'bcf - coastal renaissance Victoria Bc'],
+      ['gofundme Victoria Bc', 'gofndme* grieving socc Victoria Bc'],
+      ['PayPal | Google | Automatic Payment', 'miscellaneous payment Paypal'],
+    ];
+    for (const [a, b] of same) expect(sameMerchant(a, b), `${a} / ${b}`).toBe(true);
+    expect(sameMerchant('lululemon Victoria Bc', 'gofndme* grieving socc Victoria Bc')).toBe(false);
+    expect(sameMerchant('PayPal | eBay Commerce Canada Limited | Payment', 'PayPal | Hierhebikpijn.nl B.V. | Automatic Payment')).toBe(false);
+    expect(sameMerchant('the keg Victoria Bc', 'the bay Victoria Bc')).toBe(false);
+  });
+
+  it('an exact match is not taken by a looser match earlier in the file', () => {
+    const d = emptyFixture();
+    d.transactions = [makeTxn({ id: 1, txnDate: '2026-11-01', descriptor: 'bcf-swb self serve ticket Sidney Bc', amount: 33.05 })];
+    __setDataForTests(d);
+    const r = detectDuplicates([
+      strip(makeTxn({ txnDate: '2026-11-01', descriptor: 'bcf-tsa self serve ticket Delta Bc', amount: 33.05 })),
+      strip(makeTxn({ txnDate: '2026-11-01', descriptor: 'bcf-swb self serve ticket Sidney Bc', amount: 33.05 })),
+    ]);
+    expect(r.duplicates.map((t) => t.descriptor)).toEqual(['bcf-swb self serve ticket Sidney Bc']);
+    expect(r.unique.map((t) => t.descriptor)).toEqual(['bcf-tsa self serve ticket Delta Bc']);
+  });
+
   it('flags a re-export where Scotia renamed the merchant', () => {
     const d = emptyFixture();
     d.transactions = [makeTxn({ id: 1, txnDate: '2026-09-15', descriptor: 'old navy 800-427-7895 On', amount: -31.35 })];

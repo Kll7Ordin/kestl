@@ -679,7 +679,10 @@ export function getFilePath(): string | null {
 export interface CleanupResult { id: string; changed: number }
 
 /** Run a one-time migration (gated by data.completedMigrations). */
-export const REMOVE_RENAMED_DUPLICATES = 'removeRenamedBankDuplicates';
+// V2: the merchant matcher now also catches "tst-"/"www."/"global-e /" prefixes, store numbers,
+// short vs long names ("sdm" / "sdm 269", "bc ferries" / "bcf - ...") and plain vs linked PayPal debits.
+// A new id runs the removal (and the backup before it) once more.
+export const REMOVE_RENAMED_DUPLICATES = 'removeRenamedBankDuplicatesV2';
 
 export function isMigrationDone(id: string): boolean {
   return data.completedMigrations?.includes(id) ?? false;
