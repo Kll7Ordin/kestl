@@ -1071,6 +1071,20 @@ export async function startupCleanup(): Promise<CleanupResult[]> {
     return n;
   });
 
+  // 19. Amazon charges only carry a payment note when a gift card paid; drop the card-number notes
+  // ("Visa ***1234") earlier imports left. Anything after the card (e.g. "US$12.00") stays.
+  migrate(results, 'purgeAmazonCardNotes', () => {
+    let n = 0;
+    for (const t of data.transactions) {
+      if (t.source !== 'amazon_payment' || !t.comment) continue;
+      const m = t.comment.match(/^(?:Mastercard|Visa)\s+\*{3,4}\d{4}(?:\s*·\s*)?/i);
+      if (!m) continue;
+      t.comment = t.comment.slice(m[0].length).trim() || null;
+      n++;
+    }
+    return n;
+  });
+
   // 13. (every launch) backfill category colors for categories that don't have one yet
   for (const c of data.categories) {
     if (!c.color) { c.color = pickDistinctColor(data.categories); colorized++; }
