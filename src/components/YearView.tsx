@@ -17,7 +17,7 @@ import {
   Legend,
 } from 'chart.js';
 import { Line, Doughnut, Bar } from 'react-chartjs-2';
-import { formatAmount } from '../utils/format';
+import { formatAmount, formatDate } from '../utils/format';
 import { forecastMonths } from '../logic/forecast';
 import { computeYearData, monthsOfYear, rollingTwelveMonths, mostRecentCompletedMonth, type MonthData } from '../logic/yearData';
 import { isCredit } from '../logic/txnKind';
@@ -81,7 +81,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
 
   const monthLabels = data.map((d) => {
     const [yr, mo] = d.month.split('-').map(Number);
-    const abbr = new Date(yr, mo - 1, 1).toLocaleString('en-CA', { month: 'short' });
+    const abbr = formatDate(new Date(yr, mo - 1, 1), 'en-CA', { month: 'short' });
     // Show year on first month of year or first data point
     return `${abbr} ${yr}`;
   });
@@ -378,7 +378,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
             <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>
               {(() => {
                 const months = rollingTwelveMonths();
-                const fmt = (m: string) => { const [y, mo] = m.split('-').map(Number); return new Date(y, mo - 1).toLocaleString('en-CA', { month: 'short', year: 'numeric' }); };
+                const fmt = (m: string) => { const [y, mo] = m.split('-').map(Number); return formatDate(new Date(y, mo - 1), 'en-CA', { month: 'short', year: 'numeric' }); };
                 return `${fmt(months[0])} – ${fmt(months[11])}`;
               })()}
             </span>
@@ -476,7 +476,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
                 const [yr, mo] = f.month.split('-').map(Number);
                 return (
                   <tr key={f.month}>
-                    <td>{new Date(yr, mo - 1, 1).toLocaleString('en-CA', { month: 'short' })} {yr}</td>
+                    <td>{formatDate(new Date(yr, mo - 1, 1), 'en-CA', { month: 'short' })} {yr}</td>
                     <td className="num positive" style={{ fontWeight: 'normal' }}>${formatAmount(f.income, 0)}</td>
                     <td className="num" style={{ fontWeight: 'normal' }}>${formatAmount(f.expense, 0)}</td>
                     <td className={`num ${f.net >= 0 ? 'positive' : 'negative'}`} style={{ fontWeight: 'normal' }}>${formatAmount(f.net, 0)}</td>
@@ -514,7 +514,7 @@ export function YearView({ navFilter, onNavConsumed, darkMode = false }: YearVie
                 const completed = isCompleted(d.month);
                 const v = d.planned - d.actual;
                 const [yr, mo] = d.month.split('-').map(Number);
-                const monthAbbr = new Date(yr, mo - 1, 1).toLocaleString('en-CA', { month: 'short' });
+                const monthAbbr = formatDate(new Date(yr, mo - 1, 1), 'en-CA', { month: 'short' });
                 return (
                   <tr key={d.month} className={i % 2 === 0 ? 'budget-row-even' : 'budget-row-odd'} style={!completed ? { color: 'var(--text-3)' } : undefined}>
                     <td>{monthAbbr} {yr}</td>

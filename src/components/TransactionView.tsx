@@ -216,12 +216,27 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   // Suggestions scored against all uncategorized transactions — not filtered by visible txns,
   // so month/search filter changes don't retrigger batchGetGuessScores.
   // Deferred: after a category click React paints the row first, then rescores in the background.
-  const suggestTxns = useDeferredValue(allTransactions);
-  const suggestSplits = useDeferredValue(splitsMap);
+  // Every save hands out new array references, so key the (expensive) rebuild on just the fields
+  // suggestions read. Starring, comments, notes etc. then cost nothing here.
+  const corpusKey = useMemo(() => {
+    let k = '';
+    for (const t of allTransactions) {
+      k += `${t.id}\u0001${t.categoryId ?? ''}\u0001${t.isTransfer ? 1 : 0}\u0001${t.ignoreInBudget ? 1 : 0}\u0001${t.amount}\u0001${t.txnDate}\u0001${t.descriptor}\u0002`;
+    }
+    return k + [...splitsMap.keys()].join(',');
+  }, [allTransactions, splitsMap]);
+  const liveKey = categories.filter((c) => !c.archived).map((c) => c.id).join(',');
+  /* eslint-disable react-hooks/exhaustive-deps -- deliberately keyed on content, see above */
+  const corpusInput = useMemo(
+    () => ({ txns: allTransactions, splits: splitsMap, live: new Set(categories.filter((c) => !c.archived).map((c) => c.id)) }),
+    [corpusKey, liveKey],
+  );
+  /* eslint-enable react-hooks/exhaustive-deps */
+  const { txns: suggestTxns, splits: suggestSplits, live: suggestLive } = useDeferredValue(corpusInput);
   const merchantTypes = useDeferredValue(appData.merchantTypes);
   const merchantLookups = useDeferredValue(appData.merchantLookups);
   const { suggester, allSuggestions } = useMemo(() => {
-    const live = new Set(categories.filter((c) => !c.archived).map((c) => c.id));
+    const live = suggestLive;
     const suggester = buildSuggester(suggestionCorpus(suggestTxns, live), { merchantTypes });
     const suggestions = new Map<number, RowSuggestion>();
     for (const t of suggestTxns) {
@@ -236,7 +251,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       if (history || ai) suggestions.set(t.id, { history, ai });
     }
     return { suggester, allSuggestions: suggestions };
-  }, [suggestTxns, categories, suggestSplits, merchantTypes, merchantLookups]);
+  }, [suggestTxns, suggestLive, suggestSplits, merchantTypes, merchantLookups]);
 
   // Merchants the local model hasn't labelled yet (only offered when AI features are on).
   const unlabelledCount = useMemo(() => {
@@ -518,14 +533,6 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     }
     setRefundPrompts((prev) => prev.filter((r) => r.refundTxn.id !== candidate.refundTxn.id));
   }
-
-  const [showTop, setShowTop] = useState(false);
-  useEffect(() => {
-    const onScroll = () => setShowTop(window.scrollY > 400);
-    onScroll();
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, []);
 
   return (
     <div>
@@ -1139,16 +1146,6 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
             </div>
           </div>
         </div>,
-        document.body,
-      )}
-      {showTop && createPortal(
-        <button
-          className="btn"
-          title="Back to top"
-          aria-label="Back to top"
-          onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
-          style={{ position: 'fixed', right: '1.25rem', bottom: '1.25rem', zIndex: 900, borderRadius: '50%', width: 40, height: 40, padding: 0, boxShadow: '0 2px 8px rgba(0,0,0,0.35)' }}
-        >↑</button>,
         document.body,
       )}
     </div>

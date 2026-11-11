@@ -14,6 +14,7 @@ import { getAISettings, getData, subscribe, undo, canUndo, getUndoLabel, subscri
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { checkOllama } from './logic/llm';
 import { invoke } from '@tauri-apps/api/core';
+import { BackToTop } from './components/BackToTop';
 import './App.css';
 
 type Tab = 'budget' | 'transactions' | 'year' | 'savings' | 'import' | 'experimental' | 'settings' | 'tools' | 'mortgage';
@@ -173,8 +174,31 @@ function App() {
         }
       }
     };
+    // Also close the picker once a date is picked with the mouse (no close button in the native popup).
+    // Keyboard typing is left alone so multi-digit entry isn't interrupted.
+    let typing = false;
+    const keyHandler = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement && e.target.type === 'date') typing = true;
+    };
+    const downHandler = (e: MouseEvent) => {
+      if (e.target instanceof HTMLInputElement && e.target.type === 'date') typing = false;
+    };
+    const changeHandler = (e: Event) => {
+      const t = e.target;
+      if (t instanceof HTMLInputElement && t.type === 'date' && !typing && t.value) {
+        setTimeout(() => t.blur(), 0);
+      }
+    };
     document.addEventListener('mousedown', handler, true);
-    return () => document.removeEventListener('mousedown', handler, true);
+    document.addEventListener('mousedown', downHandler, true);
+    document.addEventListener('keydown', keyHandler, true);
+    document.addEventListener('change', changeHandler, true);
+    return () => {
+      document.removeEventListener('mousedown', handler, true);
+      document.removeEventListener('mousedown', downHandler, true);
+      document.removeEventListener('keydown', keyHandler, true);
+      document.removeEventListener('change', changeHandler, true);
+    };
   }, []);
 
   useEffect(() => {
@@ -431,6 +455,7 @@ function App() {
           </div>
         )}
       </main>
+      <BackToTop />
     </div>
   );
 }

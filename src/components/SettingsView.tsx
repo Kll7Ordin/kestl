@@ -82,8 +82,13 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
   const [usageModalId, setUsageModalId] = useState<number | null>(null);
   const [usageMergeTarget, setUsageMergeTarget] = useState<number | ''>('');
   const [showArchived, setShowArchived] = useState(false);
-  const activeCategories = categories.filter((c) => !c.archived);
-  const archivedCategories = categories.filter((c) => c.archived);
+  const [catSearch, setCatSearch] = useState('');
+  const activeCategories = useMemo(() => categories.filter((c) => !c.archived), [categories]);
+  const archivedCategories = useMemo(() => categories.filter((c) => c.archived), [categories]);
+  const searchNorm = catSearch.trim().replace(/\s+/g, ' ').toLowerCase();
+  const matchesSearch = (c: Category) => !searchNorm || c.name.toLowerCase().includes(searchNorm);
+  const shownActive = activeCategories.filter(matchesSearch);
+  const shownArchived = archivedCategories.filter(matchesSearch);
 
   async function handleDeleteClick(c: Category) {
     if (getCategoryUsage(c.id).total === 0) await deleteCategory(c.id);
@@ -109,14 +114,23 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
 
   return (
     <div style={{ position: 'fixed', top: 52, left: 0, right: 0, bottom: 0, zIndex: 200, background: 'var(--bg)', overflowY: 'auto', padding: '1.5rem clamp(0.75rem, 6vw, 8rem)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
+      <div style={{ maxWidth: 960, margin: '0 auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
         <button className="btn btn-ghost" onClick={onClose}>← Back</button>
         <h1 style={{ margin: 0, fontSize: '1.45rem', fontWeight: 700 }}>Categories</h1>
+        <input
+          type="text"
+          value={catSearch}
+          onChange={(e) => setCatSearch(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Escape') setCatSearch(''); }}
+          placeholder="Search categories…"
+          style={{ marginLeft: 'auto', width: 240, maxWidth: '100%' }}
+        />
       </div>
       <div className="card">
-        {activeCategories.map((c) => (
-          <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.3rem 0', borderBottom: '1px solid var(--border)', gap: '0.5rem', flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: 1, minWidth: 120 }}>
+        {shownActive.map((c) => (
+          <div key={c.id} style={{ display: 'flex', alignItems: 'center', padding: '0.3rem 0', borderBottom: '1px solid var(--border)', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flex: '1 1 240px', minWidth: 160 }}>
               <input
                 type="color"
                 value={c.color ?? '#888888'}
@@ -195,6 +209,7 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
           </div>
         ))}
         {activeCategories.length === 0 && <p className="empty">No categories</p>}
+        {activeCategories.length > 0 && shownActive.length === 0 && <p className="empty">No categories match "{catSearch.trim()}"</p>}
         <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', alignItems: 'center' }}>
           <input
             style={{ flex: 1 }}
@@ -210,9 +225,9 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
       {archivedCategories.length > 0 && (
         <div className="card" style={{ marginTop: '1rem' }}>
           <button className="btn btn-ghost btn-sm" onClick={() => setShowArchived((v) => !v)}>
-            {showArchived ? '▾' : '▸'} Archived ({archivedCategories.length})
+            {showArchived || searchNorm ? '▾' : '▸'} Archived ({searchNorm ? `${shownArchived.length} of ${archivedCategories.length}` : archivedCategories.length})
           </button>
-          {showArchived && archivedCategories.map((c) => (
+          {(showArchived || searchNorm) && shownArchived.map((c) => (
             <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.3rem 0', borderBottom: '1px solid var(--border)' }}>
               <span style={{ color: 'var(--text-3)' }}>{c.name}</span>
               <button className="btn btn-ghost btn-sm" onClick={() => setCategoryArchived(c.id, false)}>Unarchive</button>
@@ -329,6 +344,7 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
         </div>,
         document.body
       )}
+      </div>
     </div>
   );
 }

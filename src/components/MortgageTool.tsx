@@ -26,7 +26,7 @@ import {
 } from '../db';
 import { SearchableSelect } from './SearchableSelect';
 import { DateInput } from './DateInput';
-import { formatAmount } from '../utils/format';
+import { formatAmount, formatDate } from '../utils/format';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip, Legend, Filler);
 
@@ -717,7 +717,7 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
       ctx.lineTo(x, chartArea.bottom);
       ctx.stroke();
       ctx.setLineDash([]);
-      const label = payoffDate.toLocaleDateString('en-CA', { year: 'numeric', month: 'short' });
+      const label = formatDate(payoffDate, 'en-CA', { year: 'numeric', month: 'short' });
       ctx.fillStyle = 'rgba(200,200,200,0.9)';
       ctx.font = 'bold 11px sans-serif';
       ctx.textAlign = 'right';
@@ -731,7 +731,7 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
     const step = Math.max(1, Math.floor(projection.length / 60));
     const base = projection.filter((_, i) => i % step === 0 || i === projection.length - 1);
     const labels = base.map((p) =>
-      p.date.toLocaleDateString('en-CA', { year: 'numeric', month: 'short' }),
+      formatDate(p.date, 'en-CA', { year: 'numeric', month: 'short' }),
     );
     return {
       labels,
@@ -758,7 +758,7 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
       ? simProjection.filter((_, i) => i % step === 0 || i === simProjection.length - 1)
       : null;
     const labels = base.map((p) =>
-      p.date.toLocaleDateString('en-CA', { year: 'numeric', month: 'short' }),
+      formatDate(p.date, 'en-CA', { year: 'numeric', month: 'short' }),
     );
     return {
       labels,
@@ -1117,7 +1117,7 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
             <div className="card" style={{ flex: '1 1 160px', minWidth: 150 }}>
               <div style={{ fontSize: '0.72rem', opacity: 0.6, marginBottom: '0.2rem' }}>Projected payoff</div>
               <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>
-                {payoffDate ? payoffDate.toLocaleDateString('en-CA', { year: 'numeric', month: 'long' }) : '—'}
+                {payoffDate ? formatDate(payoffDate, 'en-CA', { year: 'numeric', month: 'long' }) : '—'}
               </div>
               {payoffDate && <div style={{ fontSize: '0.72rem', opacity: 0.5 }}>{yearsFromNow(payoffDate)} yrs from now</div>}
             </div>
@@ -1236,7 +1236,7 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
                     <div style={{ marginBottom: '0.5rem' }}>
                       <div style={{ fontSize: '0.68rem', opacity: 0.6 }}>Payoff</div>
                       <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#3b82f6' }}>
-                        {payoffDate ? `${payoffDate.toLocaleDateString('en-CA', { year: 'numeric', month: 'short' })} · ${yearsFromNow(payoffDate)} yrs` : '—'}
+                        {payoffDate ? `${formatDate(payoffDate, 'en-CA', { year: 'numeric', month: 'short' })} · ${yearsFromNow(payoffDate)} yrs` : '—'}
                       </div>
                     </div>
                     <div>
@@ -1250,7 +1250,7 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
                     <div style={{ marginBottom: '0.5rem' }}>
                       <div style={{ fontSize: '0.68rem', opacity: 0.6 }}>Payoff</div>
                       <div style={{ fontSize: '0.95rem', fontWeight: 600, color: '#f59e0b' }}>
-                        {simPayoffDate ? simPayoffDate.toLocaleDateString('en-CA', { year: 'numeric', month: 'short' }) : '—'}
+                        {simPayoffDate ? formatDate(simPayoffDate, 'en-CA', { year: 'numeric', month: 'short' }) : '—'}
                       </div>
                       {diff != null && diff !== 0 && (
                         <div style={{ fontSize: '0.72rem', color: sooner ? 'var(--green)' : later ? 'var(--red)' : 'inherit' }}>
