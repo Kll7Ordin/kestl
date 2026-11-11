@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.16.0](https://github.com/Kll7Ordin/kestl/compare/v2.15.0...v2.16.0) (2026-11-11)
+
+
+### Features
+
+* run ? lookup in the background with pulsing and glowing button ([b722619](https://github.com/Kll7Ordin/kestl/commit/b7226193067572402ac0823a0750f156bb8db572))
+* weigh same-amount and monthly e-transfers when suggesting categories ([04a3d03](https://github.com/Kll7Ordin/kestl/commit/04a3d031eaac4f8aaebdfc92fadaf3048440f29a))
+
+
+### Bug Fixes
+
+* Amazon orders after a returned order were imported as $0 ([52682b9](https://github.com/Kll7Ordin/kestl/commit/52682b93e7b5e51e8028e171ab54a8823be328c3))
+
 ## [2.15.0](https://github.com/Kll7Ordin/kestl/compare/v2.14.0...v2.15.0) (2026-11-11)
 
 
