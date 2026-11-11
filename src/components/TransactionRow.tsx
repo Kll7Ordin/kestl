@@ -19,6 +19,8 @@ export interface TxnRowActions {
   lookup: (t: Transaction) => void;
   /** Show why the suggestion chip guessed what it did (or nothing). Local only, no AI. */
   explain: (t: Transaction) => void;
+  /** Partial Amazon return: enter the refund to deduct from the charge. */
+  openPartialReturn: (t: Transaction) => void;
   confirmDelete: (txnId: number) => void;
   showTooltip: (cell: HTMLElement) => void;
   hideTooltip: () => void;
@@ -46,12 +48,15 @@ interface TxnRowProps {
   aiLookupEnabled: boolean;
   /** Background ? lookup: pulsing while running, glowing once finished and not yet opened. */
   lookupState?: 'running' | 'ready';
+  /** Partial Amazon return: the returned items (joined, so memo compares a string) and any refund deducted. */
+  returnedItems?: string;
+  refundDeducted?: number;
   actions: MutableRefObject<TxnRowActions>;
 }
 
 export const TxnRow = memo(function TxnRow({
   t, rowClass, splits, isEditingCategory, suggestionCatId, suggestionName, suggestionTitle, suggestionFromAi, suggestion2CatId, suggestion2Name,
-  catMap, catColorMap, categoryOptions, aiLookupEnabled, lookupState, actions,
+  catMap, catColorMap, categoryOptions, aiLookupEnabled, lookupState, returnedItems, refundDeducted, actions,
 }: TxnRowProps) {
   const a = () => actions.current;
   const credit = isCredit(t) || t.amount < 0;
@@ -72,6 +77,22 @@ export const TxnRow = memo(function TxnRow({
         {t.isTransfer && <span className="chip" style={{ marginLeft: '4px', background: '#64748b', color: '#fff' }}>Transfer</span>}
         {isPaypalLinked(t) && <span className="chip" style={{ marginLeft: '4px', background: '#8b5cf6', color: '#fff' }}>PayPal</span>}
         {t.linkedTransactionId && !isPaypalLinked(t) && <span className="chip" style={{ marginLeft: '4px' }}>linked</span>}
+        {returnedItems && (
+          <span
+            className="chip"
+            style={{
+              marginLeft: '4px',
+              cursor: 'pointer',
+              background: refundDeducted ? 'transparent' : 'var(--yellow)',
+              color: refundDeducted ? 'var(--text-3)' : '#000',
+              border: refundDeducted ? '1px solid var(--border)' : undefined,
+            }}
+            title={`Returned: ${returnedItems}\n${refundDeducted ? `Refund of $${formatAmount(refundDeducted)} deducted. Click to change.` : 'Full order total charged. Click to deduct the refund.'}`}
+            onClick={(e) => { e.stopPropagation(); a().openPartialReturn(t); }}
+          >
+            {refundDeducted ? `↩ −$${formatAmount(refundDeducted)}` : '↩ Partial return'}
+          </span>
+        )}
       </td>
       <td>{t.instrument}</td>
       <td className={`num budget-num ${credit ? 'positive' : 'txn-neg'}`}>

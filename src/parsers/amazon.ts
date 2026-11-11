@@ -11,7 +11,7 @@ const NOISE = [
   /^view your item/i, /^share gift receipt/i, /^ask a product/i,
   /^return items/i, /^return window/i, /^invoice$/i,
   /^refund$/i, /^eligible through/i, /^see all reviews/i,
-  /^gift receipt/i, /^subscription charged/i,
+  /^gift receipt/i, /^subscription charged/i, /^return and product support/i,
 ];
 
 const MONTH_MAP: Record<string, string> = {
@@ -62,7 +62,12 @@ export interface AmazonParsedOrder {
   orderDate: string;
   amount: number;
   status: AmazonOrderStatus;
+  /** Items returned or cancelled from an order whose other items were kept (a partial return). */
+  returnedItems?: string[];
 }
+
+/** The line that starts each order: "Order placed", or "Subscription charged on" for Audible etc. */
+const ORDER_HEADER = /^(order\s+placed|subscription\s+charged\s+on)$/i;
 
 /** Shipment status lines ("Delivered May 12", "Return complete", "Cancelled", "Arriving Friday"). */
 const STATUS_LINE = /^(delivered|return complete|cancelled|arriving|not yet shipped|package was)/i;
@@ -79,7 +84,7 @@ function statusOf(line: string): AmazonOrderStatus {
  * status first. Whichever appears first in the paste tells us.
  */
 function statusComesFirst(lines: string[]): boolean {
-  const firstOrder = lines.findIndex((l) => /^order\s+placed$/i.test(l));
+  const firstOrder = lines.findIndex((l) => ORDER_HEADER.test(l));
   const firstStatus = lines.findIndex((l) => STATUS_LINE.test(l));
   return firstStatus !== -1 && firstOrder !== -1 && firstStatus < firstOrder;
 }
@@ -93,18 +98,43 @@ function detectStatus(lines: string[], orderPlacedIndex: number, statusFirst: bo
   if (statusFirst) {
     // Old layout: the status sits between the previous order's "Order #" and this "Order placed".
     for (let j = orderPlacedIndex - 1; j >= Math.max(0, orderPlacedIndex - 40); j--) {
-      if (/^order\s+placed$/i.test(lines[j]) || /^order\s*#/i.test(lines[j])) break;
+      if (ORDER_HEADER.test(lines[j]) || /^order\s*#/i.test(lines[j])) break;
       if (STATUS_LINE.test(lines[j])) found.push(statusOf(lines[j]));
     }
   } else {
-    for (let j = orderPlacedIndex + 1; j < lines.length && !/^order\s+placed$/i.test(lines[j]); j++) {
+    for (let j = orderPlacedIndex + 1; j < lines.length && !ORDER_HEADER.test(lines[j]); j++) {
       if (STATUS_LINE.test(lines[j])) found.push(statusOf(lines[j]));
     }
   }
+  return combineStatuses(found);
+}
+
+function combineStatuses(found: AmazonOrderStatus[]): AmazonOrderStatus {
   if (found.length > 0 && found.every((s) => s === 'returned')) return 'returned';
   if (found.length > 0 && found.every((s) => s === 'cancelled')) return 'cancelled';
   if (found.length > 0 && found.every((s) => s !== 'delivered')) return 'returned'; // mix of returned + cancelled
   return 'delivered';
+}
+
+/**
+ * Current layout only: the status each item sits under. Older orders show no "Delivered" line, just
+ * "Return window closed" per item, so an item with no status above it counts as kept. Without this,
+ * one returned item among kept ones made the whole order look returned.
+ */
+function itemStatuses(lines: string[], orderPlacedIndex: number): { kept: string[]; returned: string[] } {
+  const kept: string[] = [];
+  const returned: string[] = [];
+  let current: AmazonOrderStatus = 'delivered';
+  for (let j = orderPlacedIndex + 1; j < lines.length && !ORDER_HEADER.test(lines[j]); j++) {
+    const line = lines[j];
+    if (STATUS_LINE.test(line)) { current = statusOf(line); continue; }
+    // The returned shipment's buttons close it; items after it, with no status of their own, were kept.
+    if (/^view return/i.test(line)) { current = 'delivered'; continue; }
+    if (!isItemCandidate(line)) continue;
+    const list = current === 'delivered' ? kept : returned;
+    if (!list.includes(line)) list.push(line);
+  }
+  return { kept, returned };
 }
 
 export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
@@ -115,13 +145,21 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
 
   let i = 0;
   while (i < nonEmpty.length) {
-    if (!/^order\s+placed$/i.test(nonEmpty[i])) {
+    if (!ORDER_HEADER.test(nonEmpty[i])) {
       i++;
       continue;
     }
 
     const orderPlacedIdx = i;
-    const status = detectStatus(nonEmpty, orderPlacedIdx, statusFirst);
+    let status = detectStatus(nonEmpty, orderPlacedIdx, statusFirst);
+    let returnedItems: string[] | undefined;
+    if (!statusFirst) {
+      const items = itemStatuses(nonEmpty, orderPlacedIdx);
+      if (items.kept.length > 0 && items.returned.length > 0) {
+        status = 'delivered';
+        returnedItems = items.returned;
+      }
+    }
     i++;
 
     let txnDate: string | null = null;
@@ -130,7 +168,7 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
     const backwardItems: string[] = [];
     const forwardItems: string[] = [];
 
-    while (i < nonEmpty.length && !/^order\s+placed$/i.test(nonEmpty[i])) {
+    while (i < nonEmpty.length && !ORDER_HEADER.test(nonEmpty[i])) {
       const line = nonEmpty[i];
 
 
@@ -153,7 +191,11 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
       }
 
       const orderMatch = line.match(/order\s*#\s*([\w-]+)/i);
-      if (orderMatch) { orderNum = orderMatch[1]; i++; continue; }
+      if (orderMatch) {
+        if (!orderNum) orderNum = orderMatch[1]; // a second "Order #" belongs to a block we failed to split
+        i++;
+        continue;
+      }
 
       if (isItemCandidate(line) && !forwardItems.includes(line)) {
         forwardItems.push(line);
@@ -167,7 +209,7 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
     // boundary: another "Order placed", any status line, or any noise-category line.
     for (let j = orderPlacedIdx - 1; j >= Math.max(0, orderPlacedIdx - 20); j--) {
       const bl = nonEmpty[j];
-      if (/^order\s+placed$/i.test(bl)) break;
+      if (ORDER_HEADER.test(bl)) break;
       if (/^(delivered|return complete|cancelled|arriving|not yet shipped|order\s*#)/i.test(bl)) break;
       if (isNoiseLine(bl)) break; // any noise line = we've crossed into the previous order's action buttons
       if (isItemCandidate(bl) && !backwardItems.includes(bl)) {
@@ -191,6 +233,7 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
       orderDate: txnDate,
       amount: amount ?? 0,
       status,
+      ...(returnedItems ? { returnedItems } : {}),
     });
   }
 

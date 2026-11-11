@@ -11,6 +11,7 @@ import {
   getAISettings,
   addMerchantTypes,
   logSuggestionOutcome,
+  setAmazonRefundDeducted,
   type Transaction,
 } from '../db';
 import { getSplitsIndex, isCategorized as txnIsCategorized } from '../logic/spend';
@@ -104,6 +105,8 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [moveMonthTxn, setMoveMonthTxn] = useState<Transaction | null>(null);
   const [moveMonthYear, setMoveMonthYear] = useState('');
   const [moveMonthNum, setMoveMonthNum] = useState('');
+  const [returnTxn, setReturnTxn] = useState<Transaction | null>(null);
+  const [returnRefund, setReturnRefund] = useState('');
   const lookupJobs = useSyncExternalStore(subscribeLookupJobs, getLookupJobs, getLookupJobs);
   const [lookupTxn, setLookupTxn] = useState<Transaction | null>(null);
   const [explainTxn, setExplainTxn] = useState<Transaction | null>(null);
@@ -114,6 +117,15 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [labelling, setLabelling] = useState(false);
   const tooltipRef = useRef<DescriptorTooltipHandle>(null);
   const tbodyRef = useRef<HTMLTableSectionElement>(null);
+  // Amazon orders with some items returned, by order number. Each order's charge stays at the full
+  // total until the user deducts the refund (Amazon's order list doesn't show the refund amount).
+  const amazonReturns = useMemo(() => {
+    const m = new Map<string, { items: string; total: number; refundDeducted?: number }>();
+    for (const o of appData.amazonOrders ?? []) {
+      if (o.returnedItems?.length) m.set(o.orderNum, { items: o.returnedItems.join(', '), total: o.amount, refundDeducted: o.refundDeducted });
+    }
+    return m;
+  }, [appData.amazonOrders]);
   // Rows read handlers through this ref so they stay memoized across parent re-renders.
   const rowActions = useRef<TxnRowActions>(null!);
   rowActions.current = {
@@ -134,6 +146,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
       startLookup(t, suggester, categories.filter((c) => !c.isIncome && !c.archived).map((c) => ({ id: c.id, name: c.name })));
     },
     explain: setExplainTxn,
+    openPartialReturn: (t) => { setReturnTxn(t); setReturnRefund(String(amazonReturns.get(t.sourceRef ?? '')?.refundDeducted ?? '')); },
     confirmDelete: setConfirmDeleteId,
     showTooltip: (cell) => tooltipRef.current?.show(cell),
     hideTooltip: () => tooltipRef.current?.hide(),
@@ -797,6 +810,8 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                   categoryOptions={categoryOptions}
                   aiLookupEnabled={!!txnAiLookupEnabled}
                   lookupState={lookupStateFor(lookupJobs.get(lookupJobKey(t)))}
+                  returnedItems={t.source === 'amazon_order' ? amazonReturns.get(t.sourceRef ?? '')?.items : undefined}
+                  refundDeducted={t.source === 'amazon_order' ? amazonReturns.get(t.sourceRef ?? '')?.refundDeducted : undefined}
                   actions={rowActions}
                 />
               );
@@ -1024,6 +1039,59 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
           onClose={() => { setSplitTxn(null); }}
         />
       )}
+
+      {returnTxn && (() => {
+        const info = amazonReturns.get(returnTxn.sourceRef ?? '');
+        if (!info) return null;
+        const refund = parseFloat(returnRefund);
+        const valid = returnRefund.trim() === '' || (!isNaN(refund) && refund >= 0 && refund <= info.total);
+        const after = info.total - (isNaN(refund) ? 0 : refund);
+        const close = () => setReturnTxn(null);
+        const save = async (r: number) => { await setAmazonRefundDeducted(returnTxn.id, r); close(); };
+        return (
+          <div className="modal-overlay" onClick={close}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              <h3>Partial Return</h3>
+              <div className="card" style={{ marginBottom: '0.75rem' }}>
+                <div style={{ fontWeight: 600 }}>{returnTxn.descriptor}</div>
+                <div style={{ fontSize: '0.85rem' }}>Order total ${formatAmount(info.total)}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-2)', marginTop: '0.4rem' }}>
+                  Returned: {info.items}
+                </div>
+              </div>
+              <p style={{ fontSize: '0.85rem', color: 'var(--text-2)', marginTop: 0 }}>
+                Amazon's order list doesn't show the refund. Enter it from the refund email or the order details page.
+              </p>
+              <div className="field">
+                <label>Refund amount</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  autoFocus
+                  value={returnRefund}
+                  onChange={(e) => setReturnRefund(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && valid && refund > 0) void save(refund); }}
+                  placeholder="0.00"
+                />
+              </div>
+              {valid && refund > 0 && (
+                <div style={{ fontSize: '0.85rem' }}>Charge becomes ${formatAmount(after)}</div>
+              )}
+              {!valid && <div style={{ fontSize: '0.85rem', color: 'var(--red)' }}>Enter an amount up to ${formatAmount(info.total)}.</div>}
+              <div className="modal-actions">
+                {info.refundDeducted ? (
+                  <button className="btn btn-ghost" onClick={() => save(0)}>Remove deduction</button>
+                ) : null}
+                <button className="btn btn-ghost" onClick={close}>Cancel</button>
+                <button className="btn btn-primary" disabled={!valid || !(refund > 0)} onClick={() => save(refund)}>
+                  Deduct
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {moveMonthTxn && (
         <div className="modal-overlay" onClick={() => setMoveMonthTxn(null)}>

@@ -49,3 +49,60 @@ describe('parseAmazonOrders status', () => {
     expect(b.status).toBe('delivered');
   });
 });
+
+describe('parseAmazonOrders subscriptions', () => {
+  it('"Subscription charged on" starts its own order instead of taking over the one above', () => {
+    const text = [
+      ...order('July 20, 2026', '$15.55', '701-7348515-3525839'),
+      'Delivered 23 July',
+      'MSY BIGSUNNY 9 inch Buffet Tongs, 2 Pack Stainless Steel Food Serving Tongs',
+      'Return window closed on August 22, 2026',
+      'Buy it again',
+      'Ask a Product-Related Question',
+      'Write a product review',
+      'Subscription charged on',
+      'July 14, 2026',
+      'Total',
+      '$10.07',
+      'Order # D01-7688004-3968212',
+      'View order details',
+      'Invoice',
+      'Audible Standard',
+      'Audiobook',
+      'Write a product review',
+    ].join('\n');
+    const [a, b] = parseAmazonOrders(text);
+    expect(a).toMatchObject({ orderNum: '701-7348515-3525839', orderDate: '2026-07-20', amount: 15.55 });
+    expect(a.itemName).toMatch(/Tongs/);
+    expect(b).toMatchObject({ orderNum: 'D01-7688004-3968212', orderDate: '2026-07-14', amount: 10.07 });
+  });
+});
+
+describe('parseAmazonOrders partial returns', () => {
+  it('one returned item among kept ones with no "Delivered" line is a partial return, not a full one', () => {
+    const text = [
+      ...order('June 1, 2026', '$121.70', '701-1167005-8048252'),
+      'PATIKIL E26/E27 Medium Base 4 Light Cluster Socket, 1 Pcs Lamp Base Holder',
+      'PATIKIL E26/E27 Medium Base 4 Light Cluster Socket, 1 Pcs Lamp Base Holder',
+      'Return and product support windows have closed',
+      'Buy it again',
+      'Write a product review',
+      'Return complete',
+      'Your return is complete. Your refund has been issued.',
+      'When will I get my refund?',
+      "FITRELL 6 Pack Men's Ankle Running Socks Low Cut Cushioned Athletic Sports Socks",
+      "FITRELL 6 Pack Men's Ankle Running Socks Low Cut Cushioned Athletic Sports Socks",
+      'Buy it again',
+      'View Return/Refund Status',
+      'Write a product review',
+      'Opaza Bike Locks with 5-Digit Code, 1.2 M/4 feet Bicycle Combination Cable Lock',
+      'Return and product support windows have closed',
+      'Master Lock 8122D Combination Cable Lock, 6-Feet x 1/2-Inch',
+      'Return window closed on July 4, 2026',
+      'Get product support',
+    ].join('\n');
+    const [o] = parseAmazonOrders(text);
+    expect(o).toMatchObject({ status: 'delivered', amount: 121.7 });
+    expect(o.returnedItems).toEqual(["FITRELL 6 Pack Men's Ankle Running Socks Low Cut Cushioned Athletic Sports Socks"]);
+  });
+});

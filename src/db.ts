@@ -175,6 +175,10 @@ export interface AmazonOrder {
   orderDate: string;
   amount: number;
   status: 'delivered' | 'returned' | 'cancelled';
+  /** Partial return: the items sent back from an order whose other items were kept. */
+  returnedItems?: string[];
+  /** Refund the user deducted from the order's charge (Amazon's order list doesn't show it). */
+  refundDeducted?: number;
 }
 
 export interface AISettings {
@@ -1621,12 +1625,14 @@ export function getAmazonOrder(orderNum: string): AmazonOrder | undefined {
   return (data.amazonOrders ?? []).find((o) => o.orderNum === orderNum);
 }
 
+/** `restored` counts charges put back after an earlier import zeroed or mis-dated them. */
 export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: number; linked: number; restored: number }> {
   pushUndoSnapshot('Add amazon orders');
   if (!data.amazonOrders) data.amazonOrders = [];
   const existingMap = new Map(data.amazonOrders.map((o) => [o.orderNum, o]));
 
   let added = 0;
+  let repaired = 0;
   const toBackfill: AmazonOrder[] = [];
   const toZeroOut: AmazonOrder[] = []; // returned/cancelled orders that need existing payments zeroed
   const toRestore: AmazonOrder[] = []; // wrongly marked returned/cancelled before: undo the zeroing
@@ -1641,10 +1647,27 @@ export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: n
       if (order.itemName) toBackfill.push(order);
       if (isReturnedOrCancelled) toZeroOut.push(order);
     } else {
+      // An earlier import gave this order number another order's date and total (a subscription
+      // charge folded into the order above it). Both differing means a mis-parse, not a price edit.
+      if (order.amount > 0 && order.amount !== existing.amount && order.orderDate !== existing.orderDate) {
+        for (const t of data.transactions) {
+          if (t.source === 'amazon_order' && t.sourceRef === order.orderNum &&
+              t.amount === existing.amount && t.txnDate === existing.orderDate) {
+            t.amount = order.amount;
+            t.txnDate = order.orderDate;
+            t.categoryId = null; // it was categorized as the other order's product
+            repaired++;
+          }
+        }
+        existing.amount = order.amount;
+        existing.orderDate = order.orderDate;
+      }
       if (order.itemName && order.itemName !== existing.itemName) {
         existing.itemName = order.itemName;
         toBackfill.push(existing);
       }
+      if (order.returnedItems) existing.returnedItems = order.returnedItems;
+      else delete existing.returnedItems;
       if (order.status !== existing.status) {
         const wasReturned = existing.status === 'returned' || existing.status === 'cancelled';
         existing.status = order.status;
@@ -1691,14 +1714,30 @@ export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: n
     const payments = zeroed.filter((t) => t.source === 'amazon_payment');
     const fix = payments.length > 0 ? (payments.length === 1 ? payments : []) : zeroed.slice(0, 1);
     for (const t of fix) {
-      t.amount = order.amount;
+      t.amount = Math.round((order.amount - (order.refundDeducted ?? 0)) * 100) / 100;
       t.ignoreInBudget = false;
       restored++;
     }
   }
 
   await persist();
-  return { added, linked, restored };
+  return { added, linked, restored: restored + repaired };
+}
+
+/**
+ * Partial Amazon return: charge the order total minus the refund. Replaces any earlier deduction;
+ * 0 puts the full total back. Applies to the transaction made from the order page.
+ */
+export async function setAmazonRefundDeducted(txnId: number, refund: number): Promise<void> {
+  const t = data.transactions.find((x) => x.id === txnId);
+  const order = t?.sourceRef ? getAmazonOrder(t.sourceRef) : undefined;
+  if (!t || !order || !(order.amount > 0)) return;
+  const r = Math.min(Math.max(0, Math.round(refund * 100) / 100), order.amount);
+  pushUndoSnapshot(r > 0 ? 'Deduct Amazon refund' : 'Remove Amazon refund');
+  if (r > 0) order.refundDeducted = r;
+  else delete order.refundDeducted;
+  t.amount = Math.round((order.amount - r) * 100) / 100;
+  await persist();
 }
 
 // --- Split Templates ---

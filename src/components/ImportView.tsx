@@ -35,7 +35,7 @@ interface ImportResult {
   matched?: number;
   refundCandidates?: number;
   linkedOrders?: number;
-  /** Amazon charges restored for orders wrongly marked returned by an earlier import. */
+  /** Amazon charges an earlier import zeroed or gave the wrong order's total, now corrected. */
   restored?: number;
 }
 
@@ -285,6 +285,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
         orderDate: o.orderDate,
         amount: o.amount,
         status: o.status,
+        ...(o.returnedItems ? { returnedItems: o.returnedItems } : {}),
       }));
       await runBackup('pre-import');
       await withUndo('Import Amazon orders', async () => {
@@ -723,7 +724,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
           Parsed: {result.parsed} | Inserted: {result.inserted} | Duplicates dropped: {result.duplicates}
           {result.matched !== undefined && ` | PayPal matched: ${result.matched}`}
           {result.linkedOrders !== undefined && ` | Linked to orders: ${result.linkedOrders}`}
-          {result.restored !== undefined && ` | Restored (not returned after all): ${result.restored}`}
+          {result.restored !== undefined && ` | Corrected from an earlier import: ${result.restored}`}
           {result.refundCandidates !== undefined && ` | Refund candidates: ${result.refundCandidates}`}
         </div>
       )}
