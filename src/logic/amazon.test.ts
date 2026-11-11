@@ -234,6 +234,25 @@ describe('computeAmazonFlags', () => {
   });
 });
 
+describe('addAmazonOrders', () => {
+  beforeEach(() => { __setDataForTests(richFixture()); });
+
+  it('repairs a subscription that borrowed the total of a same-day order above it', async () => {
+    await addAmazonOrders([
+      order({ orderNum: '702-7615667-3152213', orderDate: '2026-05-15', amount: 98.17 }),
+      order({ orderNum: 'D01-0273255-2249819', itemName: 'Audible Standard', orderDate: '2026-05-15', amount: 98.17 }),
+    ]);
+    await addAmazonOrders([order({ orderNum: 'D01-0273255-2249819', itemName: 'Audible Standard', orderDate: '2026-05-15', amount: 10.07 })]);
+    expect(getData().amazonOrders!.find((o) => o.orderNum === 'D01-0273255-2249819')!.amount).toBe(10.07);
+  });
+
+  it('keeps a stored total when a re-paste only differs and nothing else shares it', async () => {
+    await addAmazonOrders([order({ orderNum: '701-9', amount: 41.76 })]);
+    await addAmazonOrders([order({ orderNum: '701-9', amount: 40 })]);
+    expect(getData().amazonOrders!.find((o) => o.orderNum === '701-9')!.amount).toBe(41.76);
+  });
+});
+
 describe('addAmazonPayments', () => {
   beforeEach(() => { __setDataForTests(richFixture()); });
 

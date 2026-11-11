@@ -1690,8 +1690,14 @@ export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: n
       if (isReturnedOrCancelled) toZeroOut.push(order);
     } else {
       // An earlier import gave this order number another order's date and total (a subscription
-      // charge folded into the order above it). Both differing means a mis-parse, not a price edit.
-      if (order.amount > 0 && order.amount !== existing.amount && order.orderDate !== existing.orderDate) {
+      // charge folded into the order above it). The order above can share the date, so a total that
+      // another order also has on that date counts as a mis-parse too, not just a differing date.
+      const borrowed = order.amount > 0 && order.amount !== existing.amount && (
+        order.orderDate !== existing.orderDate
+        || data.amazonOrders.some((o) => o !== existing && o.orderNum !== order.orderNum
+          && o.amount === existing.amount && o.orderDate === existing.orderDate)
+      );
+      if (borrowed) {
         for (const t of data.transactions) {
           if (t.source === 'amazon_order' && t.sourceRef === order.orderNum &&
               t.amount === existing.amount && t.txnDate === existing.orderDate) {
