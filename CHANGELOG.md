@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.18.1](https://github.com/Kll7Ordin/kestl/compare/v2.18.0...v2.18.1) (2026-11-11)
+
+
+### Bug Fixes
+
+* drop ? lookup category picks the AI's own reasoning doesn't name ([740a9fc](https://github.com/Kll7Ordin/kestl/commit/740a9fc39a1e9488a6d7e6fb6de056a3d9973ba4))
+
 ## [2.18.0](https://github.com/Kll7Ordin/kestl/compare/v2.17.0...v2.18.0) (2026-11-11)
 
 
