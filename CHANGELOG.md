@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.15.0](https://github.com/Kll7Ordin/kestl/compare/v2.14.0...v2.15.0) (2026-11-11)
+
+
+### Features
+
+* mark a month incomplete to exclude it from YTD, 12M and Year View ([c052c69](https://github.com/Kll7Ordin/kestl/commit/c052c692493921f8f82e30731d7045e04ca8e897))
+
 ## [2.14.0](https://github.com/Kll7Ordin/kestl/compare/v2.13.0...v2.14.0) (2026-11-11)
 
 
