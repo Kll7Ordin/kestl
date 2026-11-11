@@ -51,7 +51,9 @@ export function SplitEditor({ transaction, categories, onClose }: Props) {
 
   const totalSplit = lines.reduce((s, l) => s + (parseFloat(l.amount) || 0), 0);
   const diff = transaction.amount - totalSplit;
-  const valid = Math.abs(diff) < 0.01 && lines.every((l) => l.categoryId !== '' && parseFloat(l.amount) > 0);
+  // Each line must have the same sign as the transaction (negative-amount transactions split into negative lines).
+  const sign = Math.sign(transaction.amount) || 1;
+  const valid = Math.abs(diff) < 0.01 && lines.every((l) => l.categoryId !== '' && parseFloat(l.amount) * sign > 0);
 
   async function save() {
     if (!valid) return;
