@@ -12,6 +12,7 @@ const NOISE = [
   /^return items/i, /^return window/i, /^invoice$/i,
   /^refund$/i, /^eligible through/i, /^see all reviews/i,
   /^gift receipt/i, /^subscription charged/i, /^return and product support/i,
+  /^buy it again/i, /^manage your subscription/i,
 ];
 
 const MONTH_MAP: Record<string, string> = {
@@ -151,6 +152,7 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
     }
 
     const orderPlacedIdx = i;
+    const isSubscription = /^subscription/i.test(nonEmpty[i]);
     let status = detectStatus(nonEmpty, orderPlacedIdx, statusFirst);
     let returnedItems: string[] | undefined;
     if (!statusFirst) {
@@ -167,6 +169,7 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
     let orderNum = '';
     const backwardItems: string[] = [];
     const forwardItems: string[] = [];
+    let subscriptionName = ''; // e.g. "Audible Standard": too short to pass as an item line
 
     while (i < nonEmpty.length && !ORDER_HEADER.test(nonEmpty[i])) {
       const line = nonEmpty[i];
@@ -200,14 +203,18 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
       if (isItemCandidate(line) && !forwardItems.includes(line)) {
         forwardItems.push(line);
       }
+      if (isSubscription && !subscriptionName && orderNum && !isNoiseLine(line) && !isMetadataLine(line)) {
+        subscriptionName = line;
+      }
 
       i++;
     }
 
-    // Backward scan: items appear BEFORE "Order placed" in Amazon's layout (between
-    // the previous order's status line and this "Order placed"). Stop at any order
-    // boundary: another "Order placed", any status line, or any noise-category line.
-    for (let j = orderPlacedIdx - 1; j >= Math.max(0, orderPlacedIdx - 20); j--) {
+    // Backward scan, old layout only: items sat BEFORE "Order placed" (between the previous
+    // order's status line and this "Order placed"). In the current layout the lines above
+    // belong to the previous order. Stop at any order boundary: another "Order placed",
+    // any status line, or any noise-category line.
+    for (let j = orderPlacedIdx - 1; statusFirst && j >= Math.max(0, orderPlacedIdx - 20); j--) {
       const bl = nonEmpty[j];
       if (ORDER_HEADER.test(bl)) break;
       if (/^(delivered|return complete|cancelled|arriving|not yet shipped|order\s*#)/i.test(bl)) break;
@@ -225,7 +232,7 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
     const candidates = strongForward.length > 0 ? strongForward
       : forwardItems.length > 0 ? forwardItems
       : backwardItems;
-    const bestItem = [...candidates].sort((a, b) => b.length - a.length)[0] ?? '';
+    const bestItem = [...candidates].sort((a, b) => b.length - a.length)[0] ?? subscriptionName;
 
     results.push({
       orderNum,

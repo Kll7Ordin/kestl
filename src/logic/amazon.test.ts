@@ -188,10 +188,16 @@ describe('computeAmazonFlags', () => {
     expect(computeAmazonFlags([a, b], [order({})], covered).size).toBe(0);
   });
 
+  it('no flag when the orders page total leaves out a gift card charge', () => {
+    const card = txn({ sourceRef: '701-1', amount: 2.73, comment: 'Mastercard ****8776' });
+    const gift = txn({ sourceRef: '701-1', amount: 10.7, comment: 'Paid by Amazon gift card' });
+    expect(computeAmazonFlags([card, gift], [order({ amount: 2.73 })], covered).size).toBe(0);
+  });
+
   it('flags charges that fall short of the order total', () => {
     const a = txn({ sourceRef: '701-1', amount: 19.37, txnDate: '2026-10-04' });
     const flags = computeAmazonFlags([a], [order({ orderDate: '2026-10-03' })], covered);
-    expect(flags.get(a.id)?.label).toBe('Charged $19.37 of $41.76');
+    expect(flags.get(a.id)?.label).toBe('Orders page says $41.76, charged $19.37');
   });
 
   it('flags a partial return with no refund, and clears once the refund is in', () => {

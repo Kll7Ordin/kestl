@@ -75,6 +75,19 @@ describe('parseAmazonOrders subscriptions', () => {
     expect(a).toMatchObject({ orderNum: '701-7348515-3525839', orderDate: '2026-07-20', amount: 15.55 });
     expect(a.itemName).toMatch(/Tongs/);
     expect(b).toMatchObject({ orderNum: 'D01-7688004-3968212', orderDate: '2026-07-14', amount: 10.07 });
+    expect(b.itemName).toBe('Audible Standard'); // not the tongs from the order above
+  });
+
+  it('a subscription never borrows the item name of the order listed above it', () => {
+    const text = [
+      ...order('October 19, 2026', '$33.59', '701-7370638-5503449'),
+      'Delivered 21 October',
+      'BOSONER Kids/Youth Knee Pad Elbow Pads Guards Protective Gear Set',
+      'Subscription charged on', 'October 14, 2026', 'Total', '$10.07', 'Order # D01-7652386-2240242',
+      'View order details', 'Invoice', 'Audible Standard', 'Audiobook',
+    ].join('\n');
+    const [, b] = parseAmazonOrders(text);
+    expect(b).toMatchObject({ orderNum: 'D01-7652386-2240242', itemName: 'Audible Standard' });
   });
 });
 

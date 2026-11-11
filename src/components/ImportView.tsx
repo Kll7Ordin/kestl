@@ -18,7 +18,7 @@ import {
 } from '../db';
 import { parseBankCsv } from '../parsers/csv';
 import { parseAmazonOrders, splitAmazonPaste, USD_TO_CAD } from '../parsers/amazon';
-import { amazonDescriptor } from '../logic/amazon';
+import { amazonDescriptor, GIFT_CARD_NOTE } from '../logic/amazon';
 import { parsePaypalPaste } from '../parsers/paypal';
 import { detectDuplicates } from '../logic/duplicates';
 import { categorizeTransactionsInPlace } from '../logic/categorize';
@@ -383,7 +383,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
             linkedTransactionId: null,
             ignoreInBudget: p.isRefund,
             comment: [
-              giftCard ? 'Paid by Amazon gift card' : p.paymentMethod,
+              giftCard ? GIFT_CARD_NOTE : p.paymentMethod,
               p.isUSD ? `US$${abs.toFixed(2)}` : '',
             ].filter(Boolean).join(' · '),
           };
