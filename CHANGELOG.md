@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.18.3](https://github.com/Kll7Ordin/kestl/compare/v2.18.2...v2.18.3) (2026-11-11)
+
+
+### Bug Fixes
+
+* Amazon card notes, borrowed subscription totals, and Audible double count ([dfbb120](https://github.com/Kll7Ordin/kestl/commit/dfbb1202a6a944da402e479c4c21c58cf9a7c9f1))
+* Amazon charges on an imported card no longer count twice ([198c0c9](https://github.com/Kll7Ordin/kestl/commit/198c0c9eb9b50d0b297f4263f8e2d895c2d4de4d))
+* re-pasting Amazon orders repairs a subscription that took a same-day order's total ([3262351](https://github.com/Kll7Ordin/kestl/commit/326235101197889704bf916ed7d9559d35bfba71))
+
 ## [2.18.2](https://github.com/Kll7Ordin/kestl/compare/v2.18.1...v2.18.2) (2026-11-11)
 
 
