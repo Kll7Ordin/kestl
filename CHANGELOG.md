@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.17.0](https://github.com/Kll7Ordin/kestl/compare/v2.16.0...v2.17.0) (2026-11-11)
+
+
+### Features
+
+* flag partial Amazon returns and let you deduct the refund ([f84c9cc](https://github.com/Kll7Ordin/kestl/commit/f84c9cc22cf71ddf2906e14636ccf16cef35771b))
+
 ## [2.16.0](https://github.com/Kll7Ordin/kestl/compare/v2.15.0...v2.16.0) (2026-11-11)
 
 
