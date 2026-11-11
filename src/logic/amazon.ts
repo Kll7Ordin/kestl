@@ -68,6 +68,37 @@ export function amazonPaymentKey(t: Pick<Transaction, 'sourceRef' | 'txnDate' | 
   return `${t.sourceRef}|${t.originalTxnDate ?? t.txnDate}|${t.amount.toFixed(2)}|${isCredit(t) ? 'refund' : 'charge'}`;
 }
 
+/** Days apart an Amazon charge and the same charge on a bank statement can be dated. */
+const CARD_MATCH_DAYS = 3;
+/** Bank descriptors for Amazon and its subsidiaries ("audible ca*xxx Amzn.Com/Billnj", "amzn mktp ca"). */
+const AMAZON_BANK_DESCRIPTOR = /amzn|amazon|audible/i;
+
+const daysApart = (a: string, b: string) =>
+  Math.abs(new Date(`${a}T00:00:00Z`).getTime() - new Date(`${b}T00:00:00Z`).getTime()) / 86400000;
+
+/**
+ * Amazon charges and refunds paid with a card whose statement is imported too (Audible bills the
+ * Visa directly), paired with that bank line: same amount and direction, dated within a few days,
+ * Amazon-looking descriptor. Each bank line pairs at most once; the closest date wins.
+ */
+export function pairAmazonCardCharges(transactions: Transaction[]): { amazon: Transaction; bank: Transaction }[] {
+  const bank = transactions.filter((t) => t.source === 'bank_csv' && !t.amazonKey && !t.isTransfer
+    && AMAZON_BANK_DESCRIPTOR.test(t.descriptor));
+  const used = new Set<number>();
+  const pairs: { amazon: Transaction; bank: Transaction }[] = [];
+  for (const a of transactions) {
+    if (a.source !== 'amazon_payment' || a.amount === 0) continue;
+    let best: Transaction | null = null;
+    for (const b of bank) {
+      if (used.has(b.id) || isCredit(b) !== isCredit(a) || Math.abs(Math.abs(b.amount) - Math.abs(a.amount)) >= 0.005) continue;
+      const d = daysApart(a.txnDate, b.txnDate);
+      if (d <= CARD_MATCH_DAYS && (!best || d < daysApart(a.txnDate, best.txnDate))) best = b;
+    }
+    if (best) { used.add(best.id); pairs.push({ amazon: a, bank: best }); }
+  }
+  return pairs;
+}
+
 /** Comment on a charge line paid from an Amazon gift card balance. */
 export const GIFT_CARD_NOTE = 'Paid by Amazon gift card';
 const isGiftCardCharge = (t: Transaction) => (t.comment ?? '').startsWith(GIFT_CARD_NOTE);
@@ -91,13 +122,14 @@ export function computeAmazonFlags(
   const refunds = new Map<string, Transaction[]>();
   const orderTxns = new Set<string>();
   for (const t of transactions) {
-    if (!t.sourceRef) continue;
-    if (t.source === 'amazon_order') orderTxns.add(t.sourceRef);
-    if (t.source !== 'amazon_payment' || t.amount === 0) continue;
+    if (t.source === 'amazon_order' && t.sourceRef) orderTxns.add(t.sourceRef);
+    // A bank line that absorbed an Amazon charge still counts toward that order's total.
+    const orderNum = t.source === 'amazon_payment' ? t.sourceRef : t.amazonKey?.split('|')[0];
+    if (!orderNum || t.amount === 0) continue;
     const m = isCredit(t) ? refunds : charges;
-    const list = m.get(t.sourceRef) ?? [];
+    const list = m.get(orderNum) ?? [];
     list.push(t);
-    m.set(t.sourceRef, list);
+    m.set(orderNum, list);
   }
 
   for (const t of transactions) {

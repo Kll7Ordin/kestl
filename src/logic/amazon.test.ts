@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(1) }));
 
-import { __setDataForTests, getData, addAmazonPayments, addAmazonOrders, type Transaction, type AmazonOrder } from '../db';
+import { __setDataForTests, getData, addAmazonPayments, addAmazonOrders, bulkAddTransactions, type Transaction, type AmazonOrder } from '../db';
 import { richFixture } from '../test/fixtures';
 import { splitAmazonPaste, parseAmazonOrders } from '../parsers/amazon';
 import { computeAmazonFlags, mergeRange, amazonDescriptor } from './amazon';
@@ -296,5 +296,61 @@ describe('addAmazonPayments', () => {
     expect(t.source).toBe('amazon_payment');
     expect(getData().transactionSplits.filter((s) => s.transactionId === t.id).map((s) => s.amount)).toEqual([10, 20]);
     expect(getData().transactionSplits.some((s) => s.transactionId === old.id)).toBe(false);
+  });
+});
+
+describe('Amazon charges on a card whose statement is imported too', () => {
+  beforeEach(() => { __setDataForTests(richFixture()); });
+
+  const audible = (extra: Partial<Transaction> = {}): Omit<Transaction, 'id'> => ({
+    source: 'amazon_payment', sourceRef: 'D01-0273255-2249819', txnDate: '2026-05-15', amount: 10.07, instrument: 'Amazon',
+    descriptor: amazonDescriptor('D01-0273255-2249819', 'Audible Standard'), categoryId: null, linkedTransactionId: null,
+    ignoreInBudget: false, comment: null, ...extra,
+  });
+  const visa = (extra: Partial<Transaction> = {}): Omit<Transaction, 'id'> => ({
+    source: 'bank_csv', sourceRef: 'visa.csv', txnDate: '2026-05-15', amount: 10.07, instrument: 'Scotiabank Credit Card CSV',
+    descriptor: 'audible ca*nh0do75f3 Amzn.Com/Billnj', categoryId: null, linkedTransactionId: null,
+    ignoreInBudget: false, comment: null, ...extra,
+  });
+  const amazonRows = () => getData().transactions.filter((t) => t.sourceRef === 'D01-0273255-2249819');
+
+  it('folds an Amazon charge into the bank line already there, and a re-paste does not add it back', async () => {
+    const catId = getData().categories[0].id;
+    await bulkAddTransactions([visa()]);
+    await addAmazonPayments([audible({ categoryId: catId })], new Map());
+    expect(amazonRows()).toEqual([]);
+    const bank = getData().transactions.find((t) => t.sourceRef === 'visa.csv')!;
+    expect(bank.amazonKey).toBe('D01-0273255-2249819|2026-05-15|10.07|charge');
+    expect(bank.categoryId).toBe(catId); // took the Amazon side's category
+
+    const again = await addAmazonPayments([audible()], new Map());
+    expect(again).toMatchObject({ inserted: 0, duplicates: 1 });
+    expect(amazonRows()).toEqual([]);
+  });
+
+  it('folds an existing Amazon charge when the bank statement comes in later, keeping the bank category', async () => {
+    const [c1, c2] = getData().categories;
+    await addAmazonPayments([audible({ categoryId: c1.id })], new Map());
+    expect(amazonRows()).toHaveLength(1);
+    await bulkAddTransactions([visa({ txnDate: '2026-05-17', categoryId: c2.id })]);
+    expect(amazonRows()).toEqual([]);
+    expect(getData().transactions.find((t) => t.sourceRef === 'visa.csv')!.categoryId).toBe(c2.id);
+  });
+
+  it('leaves charges alone when no Amazon bank line matches (other card, other amount, too far apart)', async () => {
+    await bulkAddTransactions([
+      visa({ descriptor: 'quality foods Victoria Bc' }),
+      visa({ amount: 10.08 }),
+      visa({ txnDate: '2026-05-20' }),
+    ]);
+    await addAmazonPayments([audible()], new Map());
+    expect(amazonRows()).toHaveLength(1);
+  });
+
+  it('a folded bank line still counts toward its order total', async () => {
+    await addAmazonOrders([order({ orderNum: '701-5', amount: 30, orderDate: '2026-10-03' })]);
+    const mc = txn({ sourceRef: '701-5', amount: 20, txnDate: '2026-10-04' });
+    const bank = txn({ source: 'bank_csv', sourceRef: 'visa.csv', amount: 10, txnDate: '2026-10-04', amazonKey: '701-5|2026-10-04|10.00|charge' });
+    expect(computeAmazonFlags([mc, bank], getData().amazonOrders, covered).size).toBe(0);
   });
 });

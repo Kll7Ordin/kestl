@@ -5,7 +5,7 @@ import { isEncryptedFile, createSessionKey, encryptWithKey, decryptWithPassword,
 import { isCredit, isPaypalLinked } from './logic/txnKind';
 import { removeExistingDuplicates } from './logic/duplicates';
 import type { LookupReport } from './logic/lookup';
-import { rangeOf, mergeRange, amazonPaymentKey, type AmazonCoverage } from './logic/amazon';
+import { rangeOf, mergeRange, amazonPaymentKey, pairAmazonCardCharges, isDigitalOrder, type AmazonCoverage } from './logic/amazon';
 
 export interface Category {
   id: number;
@@ -116,6 +116,8 @@ export interface Transaction {
   starred?: boolean;
   starNote?: string | null;
   isTransfer?: boolean; // movement between your own accounts; excluded from spend, income and suggestions
+  /** Bank line that absorbed an Amazon charge paid with this card: that charge's amazonPaymentKey. */
+  amazonKey?: string;
 }
 
 export interface TransactionSplit {
@@ -1085,6 +1087,35 @@ export async function startupCleanup(): Promise<CleanupResult[]> {
     return n;
   });
 
+  // 20. (every launch, idempotent) Amazon charges paid with a card whose statement is imported too
+  // (Audible bills the Visa directly) fold into the bank line, so they count once.
+  {
+    const n = absorbAmazonCardCharges();
+    if (n > 0) results.push({ id: 'absorbAmazonCardCharges', changed: n });
+  }
+
+  // 21. An old parse gave digital orders (Audible, STACKTV) the total of a physical order placed the
+  // same day. Re-pasting now repairs that, but only for pages pasted again: use the order's own
+  // charges instead, or 0 (unknown) when it has none, so it stops raising "Orders page says" flags.
+  migrate(results, 'repairBorrowedDigitalOrderTotals', () => {
+    const orders = data.amazonOrders ?? [];
+    const charged = new Map<string, number>();
+    for (const t of data.transactions) {
+      const orderNum = t.source === 'amazon_payment' ? t.sourceRef : t.amazonKey?.split('|')[0];
+      if (orderNum && !isCredit(t)) charged.set(orderNum, (charged.get(orderNum) ?? 0) + t.amount);
+    }
+    let n = 0;
+    for (const o of orders) {
+      if (!isDigitalOrder(o.orderNum) || !(o.amount > 0)) continue;
+      const twin = orders.some((x) => x !== o && !isDigitalOrder(x.orderNum)
+        && x.amount === o.amount && x.orderDate === o.orderDate);
+      if (!twin) continue;
+      o.amount = Math.round((charged.get(o.orderNum) ?? 0) * 100) / 100;
+      n++;
+    }
+    return n;
+  });
+
   // 13. (every launch) backfill category colors for categories that don't have one yet
   for (const c of data.categories) {
     if (!c.color) { c.color = pickDistinctColor(data.categories); colorized++; }
@@ -1450,6 +1481,8 @@ export async function bulkAddTransactions(txns: Omit<Transaction, 'id'>[]): Prom
     data.transactions.push({ id, ...t });
     ids.push(id);
   }
+  // A bank statement can bring in a charge already imported from Amazon (and its id is then gone).
+  absorbAmazonCardCharges();
   await persist();
   return ids;
 }
@@ -1773,6 +1806,30 @@ export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: n
 }
 
 /**
+ * Fold Amazon charges paid with a card whose statement is also imported into that bank line, so the
+ * money counts once. The bank line stays (it's the real card record), takes the Amazon side's
+ * category or splits if it has none, and keeps the charge's key so a re-paste doesn't add it back.
+ * Mutates `data` only; callers persist. Returns how many were folded.
+ */
+function absorbAmazonCardCharges(): number {
+  const pairs = pairAmazonCardCharges(data.transactions);
+  if (pairs.length === 0) return 0;
+  const drop = new Set<number>();
+  for (const { amazon, bank } of pairs) {
+    bank.amazonKey = amazonPaymentKey(amazon);
+    const bankSplits = data.transactionSplits.some((s) => s.transactionId === bank.id);
+    if (bank.categoryId == null && !bankSplits) {
+      bank.categoryId = amazon.categoryId;
+      for (const s of data.transactionSplits) if (s.transactionId === amazon.id) s.transactionId = bank.id;
+    }
+    drop.add(amazon.id);
+  }
+  data.transactions = data.transactions.filter((t) => !drop.has(t.id));
+  data.transactionSplits = data.transactionSplits.filter((s) => !drop.has(s.transactionId));
+  return pairs.length;
+}
+
+/**
  * Charges and refunds from Amazon's transactions page, one transaction each. Lines already imported
  * are skipped. A charge replaces the order-page transaction for its order (and any zeroed charge
  * from an old import), keeping its category. A refund with no category takes its order's.
@@ -1788,9 +1845,8 @@ export async function addAmazonPayments(
 
   const have = new Map<string, number>();
   for (const t of data.transactions) {
-    if (t.source !== 'amazon_payment') continue;
-    const k = amazonPaymentKey(t);
-    have.set(k, (have.get(k) ?? 0) + 1);
+    const k = t.source === 'amazon_payment' ? amazonPaymentKey(t) : t.amazonKey;
+    if (k) have.set(k, (have.get(k) ?? 0) + 1);
   }
   const fresh: { t: Omit<Transaction, 'id'>; i: number }[] = [];
   let duplicates = 0;
@@ -1849,6 +1905,7 @@ export async function addAmazonPayments(
     for (const sp of splits) data.transactionSplits.push({ id: nextId(), transactionId: ids[j], ...sp });
   });
   data.transactions = data.transactions.filter((t) => !replacedIds.has(t.id));
+  absorbAmazonCardCharges();
 
   await persist();
   return { inserted: fresh.length, duplicates, replaced: replaced.length };
