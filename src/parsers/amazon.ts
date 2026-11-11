@@ -268,63 +268,72 @@ function parsePaymentAmount(line: string): { amount: number; isUSD: boolean } | 
   return { amount: sign * val, isUSD: !!m[2] };
 }
 
-export function parseAmazonPayments(text: string): AmazonPaymentEntry[] {
-  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  const results: AmazonPaymentEntry[] = [];
+/** "-$19.37" / "+$157.74" / "-US$16.74". */
+function isPaymentAmountLine(line: string): boolean {
+  return parsePaymentAmount(line) !== null;
+}
 
+/**
+ * Charges and refunds from the transactions page (Your Account → Transactions), plus the indexes
+ * of the lines they came from so a combined paste can hand the rest to the order parser.
+ */
+function scanPayments(lines: string[]): { entries: AmazonPaymentEntry[]; used: Set<number> } {
+  const entries: AmazonPaymentEntry[] = [];
+  const used = new Set<number>();
   let currentDate: string | null = null;
-  let i = 0;
 
-  while (i < lines.length) {
+  for (let i = 0; i < lines.length; i++) {
     const dateVal = parseAmazonDate(lines[i]);
-    if (dateVal) {
-      currentDate = dateVal;
-      i++;
-      continue;
-    }
+    if (dateVal) { currentDate = dateVal; continue; }
+    if (!currentDate || !isPaymentMethodLine(lines[i])) continue;
 
-    if (!isPaymentMethodLine(lines[i]) || !currentDate) {
-      i++;
-      continue;
-    }
+    const amt = i + 1 < lines.length ? parsePaymentAmount(lines[i + 1]) : null;
+    const orderLine = lines[i + 2] ?? '';
+    const orderMatch = orderLine.match(/order\s*#\s*([\w-]+)/i);
+    if (!amt || !orderMatch) continue;
 
-    const paymentMethod = lines[i];
-    i++;
-
-    if (i >= lines.length) break;
-    const amtResult = parsePaymentAmount(lines[i]);
-    if (!amtResult) continue;
-    i++;
-
-    if (i >= lines.length) break;
-    const orderLine = lines[i];
-    const isRefund = /^Refund:/i.test(orderLine);
-    const orderMatch = orderLine.match(/#([\w-]+)/);
-    if (!orderMatch) continue;
-    const orderNum = orderMatch[1];
-    i++;
-
+    used.add(i).add(i + 1).add(i + 2);
     let merchant = '';
-    if (i < lines.length) {
-      const next = lines[i];
-      if (!parseAmazonDate(next) && !isPaymentMethodLine(next) && !parsePaymentAmount(next)) {
-        merchant = next;
-        i++;
-      }
+    const next = lines[i + 3];
+    if (next !== undefined && !parseAmazonDate(next) && !isPaymentMethodLine(next) && !isPaymentAmountLine(next)
+        && !/order\s*(placed|#)/i.test(next) && next.length <= 40) {
+      merchant = next;
+      used.add(i + 3);
     }
-
-    results.push({
+    entries.push({
       date: currentDate,
-      paymentMethod,
-      amount: amtResult.amount,
-      orderNum,
-      isRefund,
-      isUSD: amtResult.isUSD,
+      paymentMethod: lines[i],
+      amount: amt.amount,
+      orderNum: orderMatch[1],
+      isRefund: /^refund:/i.test(orderLine),
+      isUSD: amt.isUSD,
       merchant,
     });
+    i += merchant ? 3 : 2;
   }
+  return { entries, used };
+}
 
-  return results;
+export function parseAmazonPayments(text: string): AmazonPaymentEntry[] {
+  return scanPayments(text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)).entries;
+}
+
+/**
+ * One paste can hold the orders page, the transactions page, or both, in any order. Returns the
+ * transactions-page entries and the text left over for parseAmazonOrders (payment lines removed so
+ * they can't be read as part of an order).
+ */
+export function splitAmazonPaste(text: string): { ordersText: string; payments: AmazonPaymentEntry[] } {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const { entries, used } = scanPayments(lines);
+  if (entries.length === 0) return { ordersText: text, payments: [] };
+  // The page's "Completed"/"In progress" headers and day headings sit between payments; drop day
+  // headings that only label payments so they can't pass for an order's date.
+  const ordersText = lines
+    .filter((l, i) => !used.has(i) && !/^(completed|in progress|pending)$/i.test(l)
+      && !(parseAmazonDate(l) && /^\w+\s+\d{1,2},?\s*\d{4}$/.test(l) && (used.has(i + 1) || i === lines.length - 1)))
+    .join('\n');
+  return { ordersText, payments: entries };
 }
 
 export { USD_TO_CAD };

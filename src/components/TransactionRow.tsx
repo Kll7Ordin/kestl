@@ -51,12 +51,15 @@ interface TxnRowProps {
   /** Partial Amazon return: the returned items (joined, so memo compares a string) and any refund deducted. */
   returnedItems?: string;
   refundDeducted?: number;
+  /** Amazon charge or order missing its other half, or not adding up (logic/amazon.ts). */
+  amazonFlagLabel?: string;
+  amazonFlagDetail?: string;
   actions: MutableRefObject<TxnRowActions>;
 }
 
 export const TxnRow = memo(function TxnRow({
   t, rowClass, splits, isEditingCategory, suggestionCatId, suggestionName, suggestionTitle, suggestionFromAi, suggestion2CatId, suggestion2Name,
-  catMap, catColorMap, categoryOptions, aiLookupEnabled, lookupState, returnedItems, refundDeducted, actions,
+  catMap, catColorMap, categoryOptions, aiLookupEnabled, lookupState, returnedItems, refundDeducted, amazonFlagLabel, amazonFlagDetail, actions,
 }: TxnRowProps) {
   const a = () => actions.current;
   const credit = isCredit(t) || t.amount < 0;
@@ -77,6 +80,15 @@ export const TxnRow = memo(function TxnRow({
         {t.isTransfer && <span className="chip" style={{ marginLeft: '4px', background: '#64748b', color: '#fff' }}>Transfer</span>}
         {isPaypalLinked(t) && <span className="chip" style={{ marginLeft: '4px', background: '#8b5cf6', color: '#fff' }}>PayPal</span>}
         {t.linkedTransactionId && !isPaypalLinked(t) && <span className="chip" style={{ marginLeft: '4px' }}>linked</span>}
+        {amazonFlagLabel && (
+          <span
+            className="chip"
+            style={{ marginLeft: '4px', background: 'var(--yellow)', color: '#000', cursor: 'help' }}
+            title={amazonFlagDetail}
+          >
+            ⚠ {amazonFlagLabel}
+          </span>
+        )}
         {returnedItems && (
           <span
             className="chip"

@@ -15,6 +15,7 @@ import {
   type Transaction,
 } from '../db';
 import { getSplitsIndex, isCategorized as txnIsCategorized } from '../logic/spend';
+import { computeAmazonFlags } from '../logic/amazon';
 import { bulkCategorizeByDescriptor, bulkApplySplitRule, bulkMarkTransferByDescriptor } from '../logic/categorize';
 import { buildSuggester, parseDescriptor, suggestionCorpus, type CategoryGuess } from '../logic/suggest';
 import { classifyMerchants, needsMerchantType } from '../logic/aiSuggest';
@@ -126,6 +127,10 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     }
     return m;
   }, [appData.amazonOrders]);
+  const amazonFlags = useMemo(
+    () => computeAmazonFlags(appData.transactions, appData.amazonOrders, appData.amazonCoverage),
+    [appData.transactions, appData.amazonOrders, appData.amazonCoverage],
+  );
   // Rows read handlers through this ref so they stay memoized across parent re-renders.
   const rowActions = useRef<TxnRowActions>(null!);
   rowActions.current = {
@@ -812,6 +817,8 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                   lookupState={lookupStateFor(lookupJobs.get(lookupJobKey(t)))}
                   returnedItems={t.source === 'amazon_order' ? amazonReturns.get(t.sourceRef ?? '')?.items : undefined}
                   refundDeducted={t.source === 'amazon_order' ? amazonReturns.get(t.sourceRef ?? '')?.refundDeducted : undefined}
+                  amazonFlagLabel={amazonFlags.get(t.id)?.label}
+                  amazonFlagDetail={amazonFlags.get(t.id)?.detail}
                   actions={rowActions}
                 />
               );

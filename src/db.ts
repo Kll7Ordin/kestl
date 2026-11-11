@@ -5,6 +5,7 @@ import { isEncryptedFile, createSessionKey, encryptWithKey, decryptWithPassword,
 import { isCredit, isPaypalLinked } from './logic/txnKind';
 import { removeExistingDuplicates } from './logic/duplicates';
 import type { LookupReport } from './logic/lookup';
+import { rangeOf, mergeRange, amazonPaymentKey, type AmazonCoverage } from './logic/amazon';
 
 export interface Category {
   id: number;
@@ -254,6 +255,8 @@ export interface AppData {
   splitTemplates?: SplitTemplate[];
   savingsLoanAmount?: number;
   amazonOrders?: AmazonOrder[];
+  /** Dates each Amazon page (orders, transactions) has been pasted for; see logic/amazon.ts. */
+  amazonCoverage?: AmazonCoverage;
   aiSettings?: AISettings;
   customParsers?: CustomParser[];
   aiCategoryFeedback?: AICategoryFeedback[];
@@ -1629,6 +1632,8 @@ export function getAmazonOrder(orderNum: string): AmazonOrder | undefined {
 export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: number; linked: number; restored: number }> {
   pushUndoSnapshot('Add amazon orders');
   if (!data.amazonOrders) data.amazonOrders = [];
+  const range = rangeOf(orders.map((o) => o.orderDate));
+  if (range) data.amazonCoverage = { ...data.amazonCoverage, orders: mergeRange(data.amazonCoverage?.orders, range) };
   const existingMap = new Map(data.amazonOrders.map((o) => [o.orderNum, o]));
 
   let added = 0;
@@ -1690,11 +1695,11 @@ export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: n
     }
   }
 
-  // Zero out transactions for returned/cancelled orders
+  // Zero out order-page transactions for returned/cancelled orders. Card charges stay: the refund
+  // comes in as its own line from the transactions page.
   for (const order of toZeroOut) {
     const txns = data.transactions.filter(
-      (t) => (t.source === 'amazon_payment' || t.source === 'amazon_order') &&
-        t.sourceRef === order.orderNum && t.amount > 0,
+      (t) => t.source === 'amazon_order' && t.sourceRef === order.orderNum && t.amount > 0,
     );
     for (const t of txns) {
       t.amount = 0;
@@ -1722,6 +1727,88 @@ export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: n
 
   await persist();
   return { added, linked, restored: restored + repaired };
+}
+
+/**
+ * Charges and refunds from Amazon's transactions page, one transaction each. Lines already imported
+ * are skipped. A charge replaces the order-page transaction for its order (and any zeroed charge
+ * from an old import), keeping its category. A refund with no category takes its order's.
+ * `ruleSplits[i]` are split-rule results for `txns[i]`.
+ */
+export async function addAmazonPayments(
+  txns: Omit<Transaction, 'id'>[],
+  ruleSplits: Map<number, Omit<TransactionSplit, 'id' | 'transactionId'>[]>,
+): Promise<{ inserted: number; duplicates: number; replaced: number }> {
+  pushUndoSnapshot('Add amazon payments');
+  const range = rangeOf(txns.map((t) => t.txnDate));
+  if (range) data.amazonCoverage = { ...data.amazonCoverage, payments: mergeRange(data.amazonCoverage?.payments, range) };
+
+  const have = new Map<string, number>();
+  for (const t of data.transactions) {
+    if (t.source !== 'amazon_payment') continue;
+    const k = amazonPaymentKey(t);
+    have.set(k, (have.get(k) ?? 0) + 1);
+  }
+  const fresh: { t: Omit<Transaction, 'id'>; i: number }[] = [];
+  let duplicates = 0;
+  for (let i = 0; i < txns.length; i++) {
+    const k = amazonPaymentKey(txns[i]);
+    const n = have.get(k) ?? 0;
+    if (n > 0) { have.set(k, n - 1); duplicates++; continue; }
+    fresh.push({ t: { ...txns[i] }, i });
+  }
+
+  // Order-page totals (and zeroed old charges) for orders that now have real charges.
+  const newChargeOrders = new Set(fresh.filter((f) => !isCredit(f.t)).map((f) => f.t.sourceRef));
+  const replaced = data.transactions.filter(
+    (t) => newChargeOrders.has(t.sourceRef) &&
+      (t.source === 'amazon_order' || (t.source === 'amazon_payment' && t.amount === 0)),
+  );
+  const replacedIds = new Set(replaced.map((t) => t.id));
+  const movedSplits = new Map<number, number>(); // replaced txn id → index into fresh
+  for (const old of replaced) {
+    const mine = fresh.filter((f) => f.t.sourceRef === old.sourceRef && !isCredit(f.t));
+    const hasSplits = data.transactionSplits.some((s) => s.transactionId === old.id);
+    if (hasSplits) {
+      // Splits only carry over when one charge matches the split total.
+      if (mine.length === 1 && Math.abs(mine[0].t.amount - old.amount) < 0.01) {
+        movedSplits.set(old.id, fresh.indexOf(mine[0]));
+        mine[0].t.categoryId = null;
+      }
+    } else if (old.categoryId != null) {
+      for (const f of mine) f.t.categoryId = old.categoryId;
+    }
+  }
+
+  const ids = fresh.map(() => nextId());
+  fresh.forEach((f, j) => data.transactions.push({ id: ids[j], ...f.t }));
+
+  // Refunds follow their order's category.
+  const added = new Set(ids);
+  for (const t of data.transactions) {
+    if (!added.has(t.id) || !isCredit(t) || t.categoryId != null) continue;
+    const charge = data.transactions.find(
+      (c) => c.source === 'amazon_payment' && c.sourceRef === t.sourceRef && !isCredit(c) && c.categoryId != null,
+    );
+    if (charge) t.categoryId = charge.categoryId;
+  }
+
+  const splitTarget = new Map<number, number>();
+  for (const [oldId, j] of movedSplits) splitTarget.set(oldId, ids[j]);
+  data.transactionSplits = data.transactionSplits.flatMap((s) => {
+    if (!replacedIds.has(s.transactionId)) return [s];
+    const to = splitTarget.get(s.transactionId);
+    return to != null ? [{ ...s, transactionId: to }] : [];
+  });
+  fresh.forEach((f, j) => {
+    const splits = ruleSplits.get(f.i);
+    if (!splits || [...splitTarget.values()].includes(ids[j])) return;
+    for (const sp of splits) data.transactionSplits.push({ id: nextId(), transactionId: ids[j], ...sp });
+  });
+  data.transactions = data.transactions.filter((t) => !replacedIds.has(t.id));
+
+  await persist();
+  return { inserted: fresh.length, duplicates, replaced: replaced.length };
 }
 
 /**

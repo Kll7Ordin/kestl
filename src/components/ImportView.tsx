@@ -10,12 +10,15 @@ import {
   withUndo,
   updateTransaction,
   addAmazonOrders,
+  addAmazonPayments,
+  getAmazonOrder,
   executeCustomParser,
   type Transaction,
   type AmazonOrder,
 } from '../db';
 import { parseBankCsv } from '../parsers/csv';
-import { parseAmazonOrders } from '../parsers/amazon';
+import { parseAmazonOrders, splitAmazonPaste, USD_TO_CAD } from '../parsers/amazon';
+import { amazonDescriptor } from '../logic/amazon';
 import { parsePaypalPaste } from '../parsers/paypal';
 import { detectDuplicates } from '../logic/duplicates';
 import { categorizeTransactionsInPlace } from '../logic/categorize';
@@ -37,6 +40,8 @@ interface ImportResult {
   linkedOrders?: number;
   /** Amazon charges an earlier import zeroed or gave the wrong order's total, now corrected. */
   restored?: number;
+  /** Order-total transactions replaced by that order's card charges. */
+  replacedByCharges?: number;
 }
 
 interface ImportViewProps {
@@ -270,13 +275,16 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
     }
   }
 
-  async function handleAmazonOrderImport() {
+  async function handleAmazonImport() {
     if (!pasteText.trim()) return;
     reset();
     setBusy(true);
     try {
-      const orders = parseAmazonOrders(pasteText);
-      if (orders.length === 0) throw new Error('No orders parsed from pasted text');
+      const { ordersText, payments } = splitAmazonPaste(pasteText);
+      const orders = parseAmazonOrders(ordersText);
+      if (orders.length === 0 && payments.length === 0) {
+        throw new Error('Nothing found. Paste the Your Orders page, the Transactions page, or both.');
+      }
 
       // Store metadata for future backfills
       const amazonOrders: AmazonOrder[] = orders.map((o) => ({
@@ -287,12 +295,18 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
         status: o.status,
         ...(o.returnedItems ? { returnedItems: o.returnedItems } : {}),
       }));
+      // Orders with card charges (in this paste or an earlier one) get those charges, not the order total.
+      const paidOrders = new Set(payments.filter((p) => !p.isRefund).map((p) => p.orderNum));
+      for (const t of getData().transactions) {
+        if (t.source === 'amazon_payment' && t.amount > 0 && !isCredit(t)) paidOrders.add(t.sourceRef);
+      }
+
       await runBackup('pre-import');
-      await withUndo('Import Amazon orders', async () => {
-      const { restored } = await addAmazonOrders(amazonOrders);
+      await withUndo('Import Amazon', async () => {
+      const { restored } = orders.length > 0 ? await addAmazonOrders(amazonOrders) : { restored: 0 };
 
       const { transactions: existing } = getData();
-      const amazonSources = new Set(['amazon_order', 'amazon_paste', 'amazon_payment']);
+      const amazonSources = new Set(['amazon_order', 'amazon_paste']);
       const existingByOrder = new Map(
         existing
           .filter((t) => amazonSources.has(t.source) && t.sourceRef && t.sourceRef !== 'paste')
@@ -304,15 +318,14 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
       let skipped = 0;
 
       for (const o of orders) {
+        if (paidOrders.has(o.orderNum)) continue; // its charges are the transactions
         if (o.amount === 0 && o.status === 'delivered') {
           skipped++;
           continue; // no price known, skip
         }
         const isReturnedOrCancelled = o.status === 'returned' || o.status === 'cancelled';
         const existingTxn = existingByOrder.get(o.orderNum);
-        const descriptor = o.itemName
-          ? `Amazon | ${o.itemName} | #${o.orderNum}`
-          : `Amazon | #${o.orderNum}`;
+        const descriptor = amazonDescriptor(o.orderNum, o.itemName);
 
         if (existingTxn) {
           if (isReturnedOrCancelled && existingTxn.amount > 0) {
@@ -353,12 +366,42 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
         );
       }
 
+      // One transaction per charge or refund line from the transactions page.
+      let charges = { inserted: 0, duplicates: 0, replaced: 0 };
+      if (payments.length > 0) {
+        const chargeTxns: Omit<Transaction, 'id'>[] = payments.map((p) => {
+          const abs = Math.abs(p.amount);
+          const giftCard = /gift card/i.test(p.paymentMethod);
+          return {
+            source: 'amazon_payment',
+            sourceRef: p.orderNum,
+            txnDate: p.date,
+            amount: Math.round(abs * (p.isUSD ? USD_TO_CAD : 1) * 100) / 100,
+            instrument: 'Amazon',
+            descriptor: amazonDescriptor(p.orderNum, getAmazonOrder(p.orderNum)?.itemName),
+            categoryId: null,
+            linkedTransactionId: null,
+            ignoreInBudget: p.isRefund,
+            comment: [
+              giftCard ? 'Paid by Amazon gift card' : p.paymentMethod,
+              p.isUSD ? `US$${abs.toFixed(2)}` : '',
+            ].filter(Boolean).join(' · '),
+          };
+        });
+        const chargeSplits = categorizeTransactionsInPlace(chargeTxns);
+        charges = await addAmazonPayments(
+          chargeTxns,
+          new Map(chargeSplits.map((a) => [a.txnIndex, a.splits.map((s) => ({ categoryId: s.categoryId, amount: s.amount }))])),
+        );
+      }
+
       setResult({
-        parsed: orders.length,
-        inserted: toInsert.length,
-        duplicates: skipped,
+        parsed: orders.length + payments.length,
+        inserted: toInsert.length + charges.inserted,
+        duplicates: skipped + charges.duplicates,
         linkedOrders: overwritten || undefined,
         restored: restored || undefined,
+        replacedByCharges: charges.replaced || undefined,
       });
       });
       setPasteText('');
@@ -470,7 +513,10 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
         {importType === 'amazon' && (
           <>
             <p style={{ fontSize: '0.8rem', opacity: 0.6 }}>
-              Paste your Amazon order history. Each order creates a transaction. Returned or cancelled orders are automatically zeroed out. These will be added as new transactions.
+              Paste the <strong>Your Orders</strong> page, the <strong>Transactions</strong> page (Your Account → Your Payments → Transactions), or both at once.
+              Each charge and refund on the Transactions page becomes its own transaction, named from its order, so partial returns come out right.
+              An order with no charges imported yet uses the order total (zeroed if returned).
+              Anything missing its other half is still saved, with a ⚠ flag in Transactions.
             </p>
             <div className="field">
               <textarea
@@ -479,8 +525,8 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
                 placeholder={"Delivered March 21, 2026\nWireless Keyboard and Mouse...\nOrder placed\nMarch 21, 2026\nTotal $49.99\nOrder # 123-4567890-1234567"}
               />
             </div>
-            <button className="btn btn-primary" onClick={handleAmazonOrderImport} disabled={busy}>
-              Import Orders
+            <button className="btn btn-primary" onClick={handleAmazonImport} disabled={busy}>
+              Import
             </button>
           </>
         )}
@@ -725,6 +771,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
           {result.matched !== undefined && ` | PayPal matched: ${result.matched}`}
           {result.linkedOrders !== undefined && ` | Linked to orders: ${result.linkedOrders}`}
           {result.restored !== undefined && ` | Corrected from an earlier import: ${result.restored}`}
+          {result.replacedByCharges !== undefined && ` | Order totals replaced by card charges: ${result.replacedByCharges}`}
           {result.refundCandidates !== undefined && ` | Refund candidates: ${result.refundCandidates}`}
         </div>
       )}
