@@ -86,7 +86,7 @@ export function HistoryEvidence({ trace, catMap, catColorMap }: CatProps & { tra
                 <tr key={m.merchant}>
                   <td style={{ wordBreak: 'break-word' }}>{m.merchant}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>{m.kind} <span style={{ opacity: 0.6 }}>{pct(m.similarity)}</span></td>
-                  <td className="num">{m.purchases}{m.sameAmount > 0 && <span title="Purchases for exactly this amount" style={{ opacity: 0.6 }}> ({m.sameAmount} same $)</span>}</td>
+                  <td className="num">{m.purchases}{m.sameAmount > 0 && <span title="Purchases for exactly this amount" style={{ opacity: 0.6 }}> ({m.sameAmount} same ${m.monthly ? ', monthly' : ''})</span>}</td>
                   <td>{m.categories.map((c) => `${catMap.get(c.categoryId) ?? `#${c.categoryId}`} ×${c.count}`).join(', ')}</td>
                   <td style={{ whiteSpace: 'nowrap', opacity: 0.7 }}>{m.lastDate}</td>
                 </tr>

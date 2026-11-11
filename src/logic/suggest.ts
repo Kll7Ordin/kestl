@@ -6,11 +6,14 @@
  *   - how similar its merchant is (same merchant ≫ same name prefix ≫ similar spelling ≫ shared rare words)
  *   - how recent it is (habits change: the latest choice for a merchant counts most)
  *   - whether the amount matches (same merchant + same amount ≈ the same recurring thing, e.g. a $501
- *     e-transfer is daycare, a $3 one is an allowance)
+ *     e-transfer is daycare, a $3 one is an allowance). Same-amount payments made about monthly count
+ *     even more. For bank transfers, which name no merchant, the amount is most of the evidence: past
+ *     transfers for other amounts count for little.
  * A suggestion is made only when one category clearly wins and there is enough evidence behind it.
  */
 import type { Transaction } from '../db';
 import { isCredit } from './txnKind';
+import { formatAmount } from '../utils/format';
 
 // ── Merchant extraction ───────────────────────────────────────────────────────
 
@@ -168,6 +171,18 @@ export interface MatchEvidence {
   lastDate: string;
   /** Purchases for exactly this amount (only counted for close matches, where amount matters). */
   sameAmount: number;
+  /** The same-amount purchases recur about monthly in one category. */
+  monthly: boolean;
+}
+
+/** Past purchases for exactly this amount, across all close matches. */
+export interface SameAmountEvidence {
+  count: number;
+  categories: { categoryId: number; count: number }[];
+  /** Category whose same-amount purchases recur about monthly, if any. */
+  monthlyCategoryId: number | null;
+  /** Newest same-amount purchase, YYYY-MM-DD ('' if none). */
+  lastDate: string;
 }
 
 export interface CategoryShare {
@@ -191,6 +206,8 @@ export interface SuggestTrace {
   merchantTypeStatus: MerchantTypeStatus;
   /** Past merchants that matched, strongest first (at most 8). */
   matches: MatchEvidence[];
+  /** Close matches for exactly this amount. */
+  sameAmount: SameAmountEvidence;
   /** Weighted vote from matching merchant names. */
   nameScores: CategoryShare[];
   /** How past merchants of the same kind were filed (empty without a usable type). */
@@ -222,6 +239,26 @@ function toShares(scores: Map<number, number>): CategoryShare[] {
 }
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
+const isoDate = (ms: number) => (ms > 0 ? new Date(ms).toISOString().slice(0, 10) : '');
+
+/** Vote weights for one past purchase of a close match, by how its amount compares. */
+const AMT_SAME = 4;
+const AMT_SAME_MONTHLY = 8;
+const AMT_NEAR = 1.6;
+/** A bank transfer for a different amount is most likely a different thing. */
+const TRANSFER_AMT_OTHER = 0.2;
+
+/** At least three dates, mostly about a month apart. */
+export function isMonthly(datesMs: number[]): boolean {
+  const d = [...new Set(datesMs.filter((x) => x > 0))].sort((a, b) => a - b);
+  if (d.length < 3) return false;
+  let monthly = 0;
+  for (let i = 1; i < d.length; i++) {
+    const gap = (d[i] - d[i - 1]) / DAY_MS;
+    if (gap >= 25 && gap <= 36) monthly++;
+  }
+  return monthly >= 2 && monthly / (d.length - 1) >= 0.6;
+}
 
 /**
  * Build a reusable suggester over a corpus of categorized transactions. Use `corpusFilter` upstream to
@@ -316,8 +353,12 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
   const seen = new Uint8Array(merchants.length);
 
   /** Name-matching tier. With `trace`, also records every match and the vote. */
-  function byName(q: ParsedDescriptor, amount: number, refMs: number, trace?: SuggestTrace): { scores: Map<number, number>; best: { sim: number; kind: string; n: number } } {
+  function byName(q: ParsedDescriptor, amount: number, refMs: number, transfer: boolean, trace?: SuggestTrace): { scores: Map<number, number>; best: { sim: number; kind: string; n: number } } {
     const qTri = trigrams(q.compact);
+    const same = trace?.sameAmount;
+    const sameCats = new Map<number, number>();
+    const sameDates = new Map<number, number[]>();
+    let sameLast = 0;
     const touched: number[] = [];
     const touch = (i: number) => { if (!seen[i]) { seen[i] = 1; touched.push(i); } };
     for (const g of qTri) for (const i of byTri.get(g) ?? []) { inter[i]++; touch(i); }
@@ -334,15 +375,36 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
       // Within one merchant, each row votes; the vote total for a merchant is damped (sqrt) so a
       // merchant seen 40 times doesn't drown out a closer match seen twice.
       const raw = new Map<number, number>();
+      const close = sim >= 0.85;
+      const isSame = (r: Merchant['rows'][number]) => Math.abs(r.amount - amount) < 0.01;
+      // Same-amount purchases that recur about monthly in one category are a standing payment.
+      const monthlyCats = new Set<number>();
       let sameAmount = 0;
+      if (close) {
+        const datesByCat = new Map<number, number[]>();
+        for (const r of m.rows) {
+          if (!isSame(r)) continue;
+          sameAmount++;
+          const arr = datesByCat.get(r.categoryId); if (arr) arr.push(r.dateMs); else datesByCat.set(r.categoryId, [r.dateMs]);
+          sameCats.set(r.categoryId, (sameCats.get(r.categoryId) ?? 0) + 1);
+          sameLast = Math.max(sameLast, r.dateMs);
+        }
+        for (const [cat, dates] of datesByCat) {
+          if (isMonthly(dates)) monthlyCats.add(cat);
+          const all = sameDates.get(cat); if (all) all.push(...dates); else sameDates.set(cat, [...dates]);
+        }
+      }
+      const near = (r: Merchant['rows'][number]) => Math.abs(r.amount - amount) <= Math.max(1, Math.abs(amount) * 0.05);
+      // Only when some transfer matches the amount: otherwise all of them are equally (un)likely.
+      const otherAmt = transfer && close && m.rows.some(near) ? TRANSFER_AMT_OTHER : 1;
       for (const r of m.rows) {
         const ageDays = Math.abs(refMs - r.dateMs) / DAY_MS; // distance in either direction
         const recency = 0.25 + 0.75 * Math.pow(0.5, ageDays / 240);
         let amt = 1;
-        if (sim >= 0.85) {
-          const diff = Math.abs(r.amount - amount);
-          if (diff < 0.01) { amt = 4; sameAmount++; }
-          else if (diff <= Math.max(1, Math.abs(amount) * 0.05)) amt = 1.6;
+        if (close) {
+          if (isSame(r)) amt = monthlyCats.has(r.categoryId) ? AMT_SAME_MONTHLY : AMT_SAME;
+          else if (near(r)) amt = AMT_NEAR;
+          else amt = otherAmt;
         }
         raw.set(r.categoryId, (raw.get(r.categoryId) ?? 0) + recency * amt);
       }
@@ -358,10 +420,19 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
           similarity: sim,
           purchases: m.rows.length,
           categories: [...counts.entries()].map(([categoryId, count]) => ({ categoryId, count })).sort((a, b) => b.count - a.count),
-          lastDate: last > 0 ? new Date(last).toISOString().slice(0, 10) : '',
+          lastDate: isoDate(last),
           sameAmount,
+          monthly: monthlyCats.size > 0,
         });
       }
+    }
+    if (same) {
+      same.count = [...sameCats.values()].reduce((a, b) => a + b, 0);
+      same.categories = [...sameCats.entries()].map(([categoryId, count]) => ({ categoryId, count })).sort((a, b) => b.count - a.count);
+      same.lastDate = isoDate(sameLast);
+      // Across merchant spellings too: the biggest monthly series wins.
+      const monthly = [...sameDates.entries()].filter(([, d]) => isMonthly(d)).sort((a, b) => b[1].length - a[1].length);
+      same.monthlyCategoryId = monthly[0]?.[0] ?? null;
     }
     return { scores, best };
   }
@@ -394,10 +465,11 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
   function run(descriptor: string, amount: number, refMs: number, trace?: SuggestTrace, name: (id: number) => string = (id) => `#${id}`): CategoryGuess | null {
     const q = parseDescriptor(descriptor);
     const note = (s: string) => { trace?.notes.push(s); };
+    const transfer = isBankTransferDescriptor(descriptor);
     if (trace) {
       trace.merchant = q.key;
       trace.product = q.product;
-      trace.bankTransfer = isBankTransferDescriptor(descriptor);
+      trace.bankTransfer = transfer;
     }
     if (!q.key) {
       note('No merchant name could be read from the descriptor, so there is nothing to compare.');
@@ -405,11 +477,26 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
     }
 
     // Tier 1: similar merchant names.
-    const { scores, best } = byName(q, amount, refMs, trace);
+    const { scores, best } = byName(q, amount, refMs, transfer, trace);
     if (trace) {
       trace.matches.sort((a, b) => b.similarity - a.similarity || b.purchases - a.purchases);
       trace.matches = trace.matches.slice(0, 8);
       trace.nameScores = toShares(scores);
+      const sa = trace.sameAmount;
+      const things = transfer ? 'transfers' : 'purchases';
+      const $ = `$${formatAmount(Math.abs(amount))}`;
+      if (sa.count > 0) {
+        const split = sa.categories.length === 1
+          ? (sa.count === 1 ? `filed as ${name(sa.categories[0].categoryId)}` : `all ${name(sa.categories[0].categoryId)}`)
+          : sa.categories.map((c) => `${c.count} ${name(c.categoryId)}`).join(', ');
+        const monthly = sa.monthlyCategoryId != null
+          ? ` ${sa.categories.length === 1 ? 'They' : `The ${name(sa.monthlyCategoryId)} ones`} recur about monthly, which looks like a standing payment, so they count double.`
+          : '';
+        const why = transfer ? ' A bank transfer names no payee, so the amount is the best clue: transfers for other amounts count for little.' : '';
+        note(`${sa.count} past ${sa.count === 1 ? things.slice(0, -1) : things} for exactly ${$} (${split}, latest ${sa.lastDate}).${monthly}${why}`);
+      } else if (transfer && trace.matches.some((m) => m.similarity >= 0.85)) {
+        note(`No past transfer was for exactly ${$}, so the amount can't tell which payment this is.`);
+      }
     }
     let guess: CategoryGuess | null = null;
     const n = top(scores);
@@ -497,7 +584,7 @@ export function buildSuggester(corpus: Pick<Transaction, 'descriptor' | 'categor
     explain(descriptor: string, amount: number, opts: { asOf?: string; categoryName?: (id: number) => string } = {}): SuggestTrace {
       const trace: SuggestTrace = {
         merchant: '', product: false, bankTransfer: false, merchantType: null, merchantTypeStatus: 'unlabelled',
-        matches: [], nameScores: [], typeScores: [], typePeers: 0, guess: null, notes: [],
+        matches: [], sameAmount: { count: 0, categories: [], monthlyCategoryId: null, lastDate: '' }, nameScores: [], typeScores: [], typePeers: 0, guess: null, notes: [],
       };
       trace.guess = run(descriptor, amount, refFor(opts.asOf), trace, opts.categoryName);
       return trace;

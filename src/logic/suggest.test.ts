@@ -62,6 +62,17 @@ describe('buildSuggester', () => {
     expect([both?.categoryId, both?.second?.categoryId].sort()).toEqual([10, 11]);
   });
 
+  it('lets a monthly same-amount e-transfer win over many other e-transfers', () => {
+    const et = 'withdrawal Free Interac E-Transfer';
+    const corpus = [
+      ...[7, 8, 9].map((m) => row(et, 10, 501, `2026-0${m}-01`)),
+      // A busy history of e-transfers for other things and amounts.
+      ...[1, 2, 3, 4, 5, 6, 7, 8, 9].flatMap((m) => [row(et, 11, 40 + m, `2026-0${m}-10`), row(et, 12, 120 + m, `2026-0${m}-15`), row(et, 13, 300 + m * 7, `2026-0${m}-20`)]),
+    ];
+    const s = buildSuggester(corpus);
+    expect(s.suggest(et, 501, '2026-10-01')?.categoryId).toBe(10);
+  });
+
   it('prefers the recent choice when a merchant moved category', () => {
     const s = buildSuggester([
       row('clean cuts barbarshop Victoria Bc', 1, 30, '2024-01-01'),
@@ -149,6 +160,22 @@ describe('explain', () => {
     const few = buildSuggester(corpus.slice(0, 2), { merchantTypes }).explain('big wok Victoria Bc', 30);
     expect(few.guess).toBeNull();
     expect(few.notes.join(' ')).toMatch(/only 2 other restaurant merchants have categorized purchases \(needs 3\)/);
+  });
+
+  it('calls out same-amount transfers and a monthly pattern', () => {
+    const et = 'withdrawal Free Interac E-Transfer';
+    const corpus = [...[7, 8, 9].map((m) => row(et, 3, 501, `2026-0${m}-01`)), row(et, 2, 60, '2026-08-12')];
+    const s = buildSuggester(corpus);
+    const tr = s.explain(et, 501, { asOf: '2026-10-01', categoryName });
+    expect(tr.sameAmount).toMatchObject({ count: 3, monthlyCategoryId: 3, lastDate: '2026-09-01' });
+    expect(tr.matches[0].monthly).toBe(true);
+    const text = tr.notes.join(' ');
+    expect(text).toMatch(/3 past transfers for exactly \$501\.00 \(all Household, latest 2026-09-01\)/);
+    expect(text).toMatch(/recur about monthly/);
+    expect(text).toMatch(/amount is the best clue/);
+    expect(tr.guess?.categoryId).toBe(3);
+
+    expect(s.explain(et, 240, { categoryName }).notes.join(' ')).toMatch(/No past transfer was for exactly \$240\.00/);
   });
 
   it('marks bank transfers and vague or unknown types', () => {
