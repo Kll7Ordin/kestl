@@ -383,7 +383,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
             linkedTransactionId: null,
             ignoreInBudget: p.isRefund,
             comment: [
-              giftCard ? GIFT_CARD_NOTE : p.paymentMethod,
+              giftCard ? GIFT_CARD_NOTE : '',
               p.isUSD ? `US$${abs.toFixed(2)}` : '',
             ].filter(Boolean).join(' · '),
           };
