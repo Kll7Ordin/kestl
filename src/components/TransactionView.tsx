@@ -40,6 +40,15 @@ function currentMonth(): string {
  * Transactions are mutated in place by db.ts, so the object reference alone can't tell memo
  * that a row changed. This string covers every field the row displays.
  */
+type SortKey = 'date' | 'descriptor' | 'instrument' | 'amount' | 'category';
+const SORT_COLUMNS: { key: SortKey; label: string; num?: boolean }[] = [
+  { key: 'date', label: 'Date' },
+  { key: 'descriptor', label: 'Descriptor' },
+  { key: 'instrument', label: 'Instrument' },
+  { key: 'amount', label: 'Amount', num: true },
+  { key: 'category', label: 'Category' },
+];
+
 function txnRowSignature(t: Transaction): string {
   return `${t.txnDate}|${t.amount}|${t.categoryId}|${t.linkedTransactionId}|${t.ignoreInBudget ? 1 : 0}|${t.isTransfer ? 1 : 0}|${t.starred ? 1 : 0}|${t.starNote ? 1 : 0}|${t.comment ? 1 : 0}|${t.instrument}|${t.descriptor}`;
 }
@@ -172,6 +181,9 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [offBudgetFilter, setOffBudgetFilter] = useState(false);
   const [starredFilter, setStarredFilter] = useState(false);
   const [transferFilter, setTransferFilter] = useState(false);
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'date', dir: 'desc' });
+  const toggleSort = (key: SortKey) => setSort((s) =>
+    s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'date' || key === 'amount' ? 'desc' : 'asc' });
   const navFilterApplied = useRef(false);
 
   // Apply nav filter from external navigation (e.g. clicking "Spent" in Budget view)
@@ -240,8 +252,37 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
           || (t.comment ?? '').toLowerCase().includes(q);
       });
     }
+    if (sort.key !== 'date' || sort.dir !== 'desc') {
+      const catLabel = (t: Transaction) => {
+        const splits = splitsMap.get(t.id);
+        if (splits && splits.length > 0) return splits.map((s) => catMap.get(s.categoryId) ?? '').join(', ');
+        return t.categoryId != null ? (catMap.get(t.categoryId) ?? '') : '';
+      };
+      const text = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
+      const cmp = (a: Transaction, b: Transaction): number => {
+        switch (sort.key) {
+          case 'date': return a.txnDate < b.txnDate ? -1 : a.txnDate > b.txnDate ? 1 : a.id - b.id;
+          case 'descriptor': return text(a.descriptor, b.descriptor);
+          case 'instrument': return text(a.instrument ?? '', b.instrument ?? '');
+          // Signed like the table shows it: credits positive, expenses negative.
+          case 'amount': return (isCredit(a) ? a.amount : -a.amount) - (isCredit(b) ? b.amount : -b.amount);
+          case 'category': return text(catLabel(a), catLabel(b));
+        }
+      };
+      const sign = sort.dir === 'asc' ? 1 : -1;
+      const blankLast = sort.key === 'category' || sort.key === 'instrument';
+      // Already in date-desc order, and sort is stable, so ties stay newest first.
+      result = [...result].sort((a, b) => {
+        if (blankLast) {
+          const ea = sort.key === 'category' ? !catLabel(a) : !a.instrument;
+          const eb = sort.key === 'category' ? !catLabel(b) : !b.instrument;
+          if (ea !== eb) return ea ? 1 : -1;
+        }
+        return sign * cmp(a, b);
+      });
+    }
     return result;
-  }, [allTransactions, monthFilter, month, catFilter, categoryFilter, instrumentFilter, starredFilter, offBudgetFilter, transferFilter, search, splitsMap, catMap, budgets, categories]);
+  }, [allTransactions, monthFilter, month, catFilter, categoryFilter, instrumentFilter, starredFilter, offBudgetFilter, transferFilter, search, splitsMap, catMap, budgets, categories, sort]);
 
   // Suggestions scored against all uncategorized transactions — not filtered by visible txns,
   // so month/search filter changes don't retrigger batchGetGuessScores.
@@ -781,11 +822,18 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
         <table className="data-table">
           <thead>
             <tr>
-              <th>Date</th>
-              <th>Descriptor</th>
-              <th>Instrument</th>
-              <th className="num">Amount</th>
-              <th>Category</th>
+              {SORT_COLUMNS.map(({ key, label, num }) => (
+                <th
+                  key={key}
+                  className={`sortable${num ? ' num' : ''}`}
+                  onClick={() => toggleSort(key)}
+                  aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                  title={`Sort by ${label.toLowerCase()}`}
+                >
+                  {label}
+                  <span className="sort-arrow">{sort.key === key ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}</span>
+                </th>
+              ))}
               <th></th>
             </tr>
           </thead>

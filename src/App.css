@@ -995,6 +995,10 @@ html.dark .budget-table tr.budget-row-even td { background: #1a1d27; }
 html.dark .budget-table tr.budget-row-odd td  { background: #252836; }
 html.dark .budget-table tr.budget-group-header td { background: #1e2130 !important; }
 html.dark .data-table th { background: #0f1117; color: #606880; }
+
+.data-table th.sortable { cursor: pointer; user-select: none; }
+.data-table th.sortable:hover { color: var(--text); }
+.data-table th .sort-arrow { font-size: 0.65em; }
 html.dark .data-table tr:hover td { background: rgba(59,130,246,0.08); }
 html.dark .data-table tr.txn-row-uncat td { background: #1e1c16; }
 html.dark .data-table tr.txn-row-uncat td:first-child,
