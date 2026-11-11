@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.18.2](https://github.com/Kll7Ordin/kestl/compare/v2.18.1...v2.18.2) (2026-11-11)
+
+
+### Bug Fixes
+
+* Amazon gift-card flags and Audible item names ([f82d950](https://github.com/Kll7Ordin/kestl/commit/f82d950b5226991edcf756d51b6a683ba88d64ec))
+
 ## [2.18.1](https://github.com/Kll7Ordin/kestl/compare/v2.18.0...v2.18.1) (2026-11-11)
 
 
