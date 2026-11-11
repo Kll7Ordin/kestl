@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.14.0](https://github.com/Kll7Ordin/kestl/compare/v2.13.0...v2.14.0) (2026-11-11)
+
+
+### Features
+
+* category search, back-to-top on every screen, and faster scrolling and clicks ([171f9a3](https://github.com/Kll7Ordin/kestl/commit/171f9a3c99c1b5048f1ea6a1af643b61ad12e489))
+
+
+### Bug Fixes
+
+* **duplicates:** catch bank-renamed duplicates and purge existing ones ([f815b11](https://github.com/Kll7Ordin/kestl/commit/f815b1126a2f199c7177fdf3176da5caf67807f6))
+* **lookup:** AI reasons before picking a category, and picks by name ([730cf7c](https://github.com/Kll7Ordin/kestl/commit/730cf7c0f2a566e4471c0a785020797f48704769))
+
 ## [2.13.0](https://github.com/Kll7Ordin/kestl/compare/v2.12.0...v2.13.0) (2026-11-10)
 
 
