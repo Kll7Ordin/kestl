@@ -35,6 +35,8 @@ interface ImportResult {
   matched?: number;
   refundCandidates?: number;
   linkedOrders?: number;
+  /** Amazon charges restored for orders wrongly marked returned by an earlier import. */
+  restored?: number;
 }
 
 interface ImportViewProps {
@@ -286,7 +288,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
       }));
       await runBackup('pre-import');
       await withUndo('Import Amazon orders', async () => {
-      await addAmazonOrders(amazonOrders);
+      const { restored } = await addAmazonOrders(amazonOrders);
 
       const { transactions: existing } = getData();
       const amazonSources = new Set(['amazon_order', 'amazon_paste', 'amazon_payment']);
@@ -355,6 +357,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
         inserted: toInsert.length,
         duplicates: skipped,
         linkedOrders: overwritten || undefined,
+        restored: restored || undefined,
       });
       });
       setPasteText('');
@@ -720,6 +723,7 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
           Parsed: {result.parsed} | Inserted: {result.inserted} | Duplicates dropped: {result.duplicates}
           {result.matched !== undefined && ` | PayPal matched: ${result.matched}`}
           {result.linkedOrders !== undefined && ` | Linked to orders: ${result.linkedOrders}`}
+          {result.restored !== undefined && ` | Restored (not returned after all): ${result.restored}`}
           {result.refundCandidates !== undefined && ` | Refund candidates: ${result.refundCandidates}`}
         </div>
       )}

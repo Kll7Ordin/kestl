@@ -1621,7 +1621,7 @@ export function getAmazonOrder(orderNum: string): AmazonOrder | undefined {
   return (data.amazonOrders ?? []).find((o) => o.orderNum === orderNum);
 }
 
-export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: number; linked: number }> {
+export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: number; linked: number; restored: number }> {
   pushUndoSnapshot('Add amazon orders');
   if (!data.amazonOrders) data.amazonOrders = [];
   const existingMap = new Map(data.amazonOrders.map((o) => [o.orderNum, o]));
@@ -1629,6 +1629,7 @@ export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: n
   let added = 0;
   const toBackfill: AmazonOrder[] = [];
   const toZeroOut: AmazonOrder[] = []; // returned/cancelled orders that need existing payments zeroed
+  const toRestore: AmazonOrder[] = []; // wrongly marked returned/cancelled before: undo the zeroing
 
   for (const order of orders) {
     const existing = existingMap.get(order.orderNum);
@@ -1647,7 +1648,9 @@ export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: n
       if (order.status !== existing.status) {
         const wasReturned = existing.status === 'returned' || existing.status === 'cancelled';
         existing.status = order.status;
+        if (order.amount > 0) existing.amount = order.amount;
         if (isReturnedOrCancelled && !wasReturned) toZeroOut.push(existing);
+        if (wasReturned && !isReturnedOrCancelled) toRestore.push(existing);
       }
     }
   }
@@ -1676,8 +1679,26 @@ export async function addAmazonOrders(orders: AmazonOrder[]): Promise<{ added: n
     }
   }
 
+  // Restore the order total on transactions zeroed for an order that wasn't returned after all. A
+  // zeroed card charge is restored only when it is the order's only one (split payments are unknown).
+  let restored = 0;
+  for (const order of toRestore) {
+    if (!(order.amount > 0)) continue;
+    const zeroed = data.transactions.filter(
+      (t) => (t.source === 'amazon_payment' || t.source === 'amazon_order') &&
+        t.sourceRef === order.orderNum && t.amount === 0 && t.ignoreInBudget,
+    );
+    const payments = zeroed.filter((t) => t.source === 'amazon_payment');
+    const fix = payments.length > 0 ? (payments.length === 1 ? payments : []) : zeroed.slice(0, 1);
+    for (const t of fix) {
+      t.amount = order.amount;
+      t.ignoreInBudget = false;
+      restored++;
+    }
+  }
+
   await persist();
-  return { added, linked };
+  return { added, linked, restored };
 }
 
 // --- Split Templates ---

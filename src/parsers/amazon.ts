@@ -64,12 +64,46 @@ export interface AmazonParsedOrder {
   status: AmazonOrderStatus;
 }
 
-function detectStatus(lines: string[], orderPlacedIndex: number): AmazonOrderStatus {
-  for (let j = orderPlacedIndex - 1; j >= Math.max(0, orderPlacedIndex - 40); j--) {
-    if (/^return complete/i.test(lines[j])) return 'returned';
-    if (/^cancelled/i.test(lines[j])) return 'cancelled';
-    if (/^order\s+placed$/i.test(lines[j])) break;
+/** Shipment status lines ("Delivered May 12", "Return complete", "Cancelled", "Arriving Friday"). */
+const STATUS_LINE = /^(delivered|return complete|cancelled|arriving|not yet shipped|package was)/i;
+
+function statusOf(line: string): AmazonOrderStatus {
+  if (/^return complete/i.test(line)) return 'returned';
+  if (/^cancelled/i.test(line)) return 'cancelled';
+  return 'delivered';
+}
+
+/**
+ * Where each order's status lines sit relative to its "Order placed" line. The current page lists
+ * them after it (Order placed → date → total → Order # → Delivered … → items); older pastes put the
+ * status first. Whichever appears first in the paste tells us.
+ */
+function statusComesFirst(lines: string[]): boolean {
+  const firstOrder = lines.findIndex((l) => /^order\s+placed$/i.test(l));
+  const firstStatus = lines.findIndex((l) => STATUS_LINE.test(l));
+  return firstStatus !== -1 && firstOrder !== -1 && firstStatus < firstOrder;
+}
+
+/**
+ * The order's own status lines only, never a neighbouring order's. An order with several shipments
+ * counts as returned or cancelled only when every shipment was: a partial return keeps the charge.
+ */
+function detectStatus(lines: string[], orderPlacedIndex: number, statusFirst: boolean): AmazonOrderStatus {
+  const found: AmazonOrderStatus[] = [];
+  if (statusFirst) {
+    // Old layout: the status sits between the previous order's "Order #" and this "Order placed".
+    for (let j = orderPlacedIndex - 1; j >= Math.max(0, orderPlacedIndex - 40); j--) {
+      if (/^order\s+placed$/i.test(lines[j]) || /^order\s*#/i.test(lines[j])) break;
+      if (STATUS_LINE.test(lines[j])) found.push(statusOf(lines[j]));
+    }
+  } else {
+    for (let j = orderPlacedIndex + 1; j < lines.length && !/^order\s+placed$/i.test(lines[j]); j++) {
+      if (STATUS_LINE.test(lines[j])) found.push(statusOf(lines[j]));
+    }
   }
+  if (found.length > 0 && found.every((s) => s === 'returned')) return 'returned';
+  if (found.length > 0 && found.every((s) => s === 'cancelled')) return 'cancelled';
+  if (found.length > 0 && found.every((s) => s !== 'delivered')) return 'returned'; // mix of returned + cancelled
   return 'delivered';
 }
 
@@ -77,6 +111,7 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
   const allLines = text.split(/\r?\n/).map((l) => l.trim());
   const nonEmpty = allLines.filter(Boolean);
   const results: AmazonParsedOrder[] = [];
+  const statusFirst = statusComesFirst(nonEmpty);
 
   let i = 0;
   while (i < nonEmpty.length) {
@@ -86,7 +121,7 @@ export function parseAmazonOrders(text: string): AmazonParsedOrder[] {
     }
 
     const orderPlacedIdx = i;
-    const status = detectStatus(nonEmpty, orderPlacedIdx);
+    const status = detectStatus(nonEmpty, orderPlacedIdx, statusFirst);
     i++;
 
     let txnDate: string | null = null;
