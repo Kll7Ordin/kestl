@@ -1321,6 +1321,71 @@ export async function mergeCategories(sourceIds: number[], targetId: number): Pr
   await persist();
 }
 
+export interface CategoryMerchant {
+  key: string;        // normalized descriptor
+  label: string;      // descriptor as the bank wrote it (first seen)
+  count: number;      // transactions + split rows in this category
+  total: number;      // signed sum of those amounts
+}
+
+const normDesc = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
+
+/** Merchants (normalized descriptors) whose transactions or split rows use this category. */
+export function getCategoryMerchants(catId: number): CategoryMerchant[] {
+  const byKey = new Map<string, CategoryMerchant>();
+  const add = (descriptor: string, amount: number) => {
+    const key = normDesc(descriptor);
+    const m = byKey.get(key) ?? { key, label: descriptor.trim(), count: 0, total: 0 };
+    m.count++;
+    m.total = Math.round((m.total + amount) * 100) / 100;
+    byKey.set(key, m);
+  };
+  const txnById = new Map(data.transactions.map((t) => [t.id, t]));
+  for (const t of data.transactions) if (t.categoryId === catId) add(t.descriptor, t.amount);
+  for (const s of data.transactionSplits) {
+    const t = s.categoryId === catId ? txnById.get(s.transactionId) : undefined;
+    if (t) add(t.descriptor, s.amount);
+  }
+  return [...byKey.values()].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+/**
+ * Separate a category (the opposite of a merge): create a new category and move the chosen
+ * merchants into it. Their transactions and split rows move, as do recurring templates for those
+ * merchants and plain rules that only match the moved merchants. Budgets stay with the original.
+ */
+export async function separateCategory(sourceId: number, newName: string, merchantKeys: string[]): Promise<number> {
+  const source = data.categories.find((c) => c.id === sourceId);
+  const name = newName.trim();
+  if (!source) throw new Error('Category not found');
+  if (!name) throw new Error('Name the new category');
+  pushUndoSnapshot('Separate category');
+  const moved = new Set(merchantKeys);
+  const id = nextId();
+  data.categories.push({ id, name, color: pickDistinctColor(data.categories), isIncome: source.isIncome || undefined });
+
+  const kept = new Set(getCategoryMerchants(sourceId).map((m) => m.key).filter((k) => !moved.has(k)));
+  for (const t of data.transactions) {
+    if (t.categoryId === sourceId && moved.has(normDesc(t.descriptor))) t.categoryId = id;
+  }
+  const txnById = new Map(data.transactions.map((t) => [t.id, t]));
+  for (const s of data.transactionSplits) {
+    const t = s.categoryId === sourceId ? txnById.get(s.transactionId) : undefined;
+    if (t && moved.has(normDesc(t.descriptor))) s.categoryId = id;
+  }
+  for (const rt of data.recurringTemplates) {
+    if (rt.categoryId === sourceId && moved.has(normDesc(rt.descriptor))) rt.categoryId = id;
+  }
+  for (const r of data.categoryRules) {
+    if (r.categoryId !== sourceId || (r.splits?.length ?? 0) >= 2) continue;
+    const p = normDesc(r.pattern);
+    const hits = (k: string) => (r.matchType === 'exact' ? k === p : k.includes(p));
+    if ([...moved].some(hits) && ![...kept].some(hits)) r.categoryId = id;
+  }
+  await persist();
+  return id;
+}
+
 // --- Category Rules ---
 export async function addCategoryRule(rule: Omit<CategoryRule, 'id'>): Promise<number> {
   pushUndoSnapshot('Add category rule');

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   __setDataForTests, getData, deleteCategory, mergeCategories, getCategoryUsage, setCategoryArchived,
-  getSelectableCategories, startupCleanup, setSplits,
+  getSelectableCategories, startupCleanup, setSplits, separateCategory, getCategoryMerchants,
 } from '../db';
 import { resolveSplits, recategorizeAll, runRuleOnHistory } from './categorize';
 import { getMonthAggregates, getRolloverCarry } from './spend';
@@ -79,6 +79,43 @@ describe('category integrity', () => {
     expect(getData().transactions.find((t) => t.id === 900)?.categoryId).toBeNull();
     expect(getData().budgets.find((b) => b.id === 900)).toBeUndefined();
     expect(getData().recurringTemplates[0].categoryId).toBeNull();
+  });
+});
+
+describe('separateCategory', () => {
+  it('moves the chosen merchants, their splits, recurring templates and only-matching rules', async () => {
+    const d = emptyFixture();
+    d.nextId = 100;
+    d.categories = [{ id: 1, name: 'Food', isIncome: false }, { id: 2, name: 'Other' }];
+    d.transactions = [
+      makeTxn({ id: 1, descriptor: 'TIM HORTONS #12', categoryId: 1, amount: 5 }),
+      makeTxn({ id: 2, descriptor: 'tim  hortons #12', categoryId: 1, amount: 6 }),
+      makeTxn({ id: 3, descriptor: 'LOBLAWS', categoryId: 1, amount: 80 }),
+      makeTxn({ id: 4, descriptor: 'TIM HORTONS #12', categoryId: null, amount: 40 }),
+    ];
+    d.transactionSplits = [{ id: 10, transactionId: 4, categoryId: 1, amount: 20 }, { id: 11, transactionId: 4, categoryId: 2, amount: 20 }];
+    d.categoryRules = [
+      { id: 20, matchType: 'contains', pattern: 'tim hortons', categoryId: 1 },
+      { id: 21, matchType: 'contains', pattern: 'o', categoryId: 1 }, // also matches LOBLAWS — stays
+    ];
+    d.recurringTemplates = [{ id: 30, descriptor: 'TIM HORTONS #12', amount: 5, instrument: '', categoryId: 1, dayOfMonth: 1, active: true }];
+    d.budgets = [{ id: 40, month: '2026-03', categoryId: 1, targetAmount: 300 }];
+    __setDataForTests(d);
+
+    const merchants = getCategoryMerchants(1);
+    expect(merchants.map((m) => [m.key, m.count])).toEqual([['tim hortons #12', 3], ['loblaws', 1]]);
+
+    const id = await separateCategory(1, 'Coffee', ['tim hortons #12']);
+    const g = getData();
+    expect(g.categories.find((c) => c.id === id)?.name).toBe('Coffee');
+    expect(g.transactions.filter((t) => t.categoryId === id).map((t) => t.id)).toEqual([1, 2]);
+    expect(g.transactions.find((t) => t.id === 3)?.categoryId).toBe(1);
+    expect(g.transactionSplits.find((s) => s.id === 10)?.categoryId).toBe(id);
+    expect(g.transactionSplits.find((s) => s.id === 11)?.categoryId).toBe(2);
+    expect(g.categoryRules.find((r) => r.id === 20)?.categoryId).toBe(id);
+    expect(g.categoryRules.find((r) => r.id === 21)?.categoryId).toBe(1);
+    expect(g.recurringTemplates[0].categoryId).toBe(id);
+    expect(g.budgets[0].categoryId).toBe(1);
   });
 });
 
