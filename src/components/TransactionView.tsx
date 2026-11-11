@@ -21,6 +21,7 @@ import { findRefundCandidates, applyRefundToOriginalMonth, type RefundCandidate 
 import { SplitEditor } from './SplitEditor';
 import { SearchableSelect } from './SearchableSelect';
 import { TransactionLookup } from './TransactionLookup';
+import { lookupJobKey, getLookupJobs, subscribeLookupJobs, startLookup, type LookupJob } from '../logic/lookupJobs';
 import { SuggestionDetails } from './SuggestionDetails';
 import { formatAmount } from '../utils/format';
 import { isCredit } from '../logic/txnKind';
@@ -67,6 +68,10 @@ interface TransactionViewProps {
   onNeedOllama?: () => void;
 }
 
+function lookupStateFor(j: LookupJob | undefined): 'running' | 'ready' | undefined {
+  return j?.status === 'running' ? 'running' : j?.unseen ? 'ready' : undefined;
+}
+
 export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLookupEnabled, onNeedOllama }: TransactionViewProps) {
   const appData = useAppData();
   const categories = appData.categories;
@@ -99,6 +104,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
   const [moveMonthTxn, setMoveMonthTxn] = useState<Transaction | null>(null);
   const [moveMonthYear, setMoveMonthYear] = useState('');
   const [moveMonthNum, setMoveMonthNum] = useState('');
+  const lookupJobs = useSyncExternalStore(subscribeLookupJobs, getLookupJobs, getLookupJobs);
   const [lookupTxn, setLookupTxn] = useState<Transaction | null>(null);
   const [explainTxn, setExplainTxn] = useState<Transaction | null>(null);
   const [editingCategoryId, setEditingCategoryId] = useState<number | null>(null);
@@ -120,7 +126,13 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     openSplit: setSplitTxn,
     openMoveMonth,
     editComment: startEditComment,
-    lookup: (t) => { onNeedOllama?.(); setLookupTxn(t); },
+    lookup: (t) => {
+      onNeedOllama?.();
+      const job = getLookupJobs().get(lookupJobKey(t));
+      const savedLookup = appData.merchantLookups?.[parseDescriptor(t.descriptor).key];
+      if (job || savedLookup) { setLookupTxn(t); return; }
+      startLookup(t, suggester, categories.filter((c) => !c.isIncome && !c.archived).map((c) => ({ id: c.id, name: c.name })));
+    },
     explain: setExplainTxn,
     confirmDelete: setConfirmDeleteId,
     showTooltip: (cell) => tooltipRef.current?.show(cell),
@@ -784,6 +796,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                   catColorMap={catColorMap}
                   categoryOptions={categoryOptions}
                   aiLookupEnabled={!!txnAiLookupEnabled}
+                  lookupState={lookupStateFor(lookupJobs.get(lookupJobKey(t)))}
                   actions={rowActions}
                 />
               );

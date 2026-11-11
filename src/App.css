@@ -1055,3 +1055,8 @@ html.dark code { background: #1e2130; border-color: #2e3347; color: #a0aabb; }
 .back-to-top:hover { opacity: 1; }
 /* Keep clear of the AI chat input when the panel is open. */
 body:has(.ai-panel) .back-to-top { display: none; }
+
+/* ? lookup button: pulses while the background lookup runs, glows when it has finished */
+@keyframes lookup-pulse { 0%, 100% { opacity: 0.35; transform: scale(1); } 50% { opacity: 1; transform: scale(1.15); } }
+.lookup-pulse { animation: lookup-pulse 1s ease-in-out infinite; color: var(--accent); }
+.lookup-glow { color: var(--accent); box-shadow: 0 0 8px 2px var(--accent); border-color: var(--accent); }

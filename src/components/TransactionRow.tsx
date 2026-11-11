@@ -44,12 +44,14 @@ interface TxnRowProps {
   catColorMap: Map<number, string>;
   categoryOptions: SearchableSelectOption[];
   aiLookupEnabled: boolean;
+  /** Background ? lookup: pulsing while running, glowing once finished and not yet opened. */
+  lookupState?: 'running' | 'ready';
   actions: MutableRefObject<TxnRowActions>;
 }
 
 export const TxnRow = memo(function TxnRow({
   t, rowClass, splits, isEditingCategory, suggestionCatId, suggestionName, suggestionTitle, suggestionFromAi, suggestion2CatId, suggestion2Name,
-  catMap, catColorMap, categoryOptions, aiLookupEnabled, actions,
+  catMap, catColorMap, categoryOptions, aiLookupEnabled, lookupState, actions,
 }: TxnRowProps) {
   const a = () => actions.current;
   const credit = isCredit(t) || t.amount < 0;
@@ -193,10 +195,10 @@ export const TxnRow = memo(function TxnRow({
         </button>
         {aiLookupEnabled && (
           <button
-            className="btn btn-ghost btn-sm"
+            className={`btn btn-ghost btn-sm${lookupState === 'running' ? ' lookup-pulse' : lookupState === 'ready' ? ' lookup-glow' : ''}`}
             onClick={() => a().lookup(t)}
-            title="Identify this transaction with AI"
-            style={{ fontWeight: 600, opacity: 0.7 }}
+            title={lookupState === 'running' ? 'Lookup running: click to watch' : lookupState === 'ready' ? 'Lookup finished: click to view' : 'Identify this transaction with AI'}
+            style={{ fontWeight: 600, opacity: lookupState ? 1 : 0.7 }}
           >
             ?
           </button>

@@ -1,10 +1,9 @@
-import { useState, useEffect, useMemo, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useState, useEffect, useMemo, useSyncExternalStore, type ReactNode } from 'react';
 import {
-  getData, subscribe, getAISettings, updateTransaction, getMerchantLookup, saveMerchantLookup,
-  addMerchantTypes, setMerchantType, logSuggestionOutcome, type Transaction,
+  getData, subscribe, updateTransaction, setMerchantType, logSuggestionOutcome, type Transaction,
 } from '../db';
-import { checkOllama, ollamaJson, searchWeb } from '../logic/llm';
-import { runLookup, type LookupReport, type LookupStep } from '../logic/lookup';
+import { lookupJobKey, subscribeLookupJobs, getLookupJobs, acknowledgeLookup, startLookup } from '../logic/lookupJobs';
+import type { LookupReport, LookupStep } from '../logic/lookup';
 import { MERCHANT_TYPES } from '../logic/aiSuggest';
 import type { Suggester } from '../logic/suggest';
 import { HistoryEvidence } from './SuggestionDetails';
@@ -69,54 +68,25 @@ export function TransactionLookup({ transaction, suggester, onClose }: Props) {
   const merchantKey = trace.merchant;
   const savedType = appData.merchantTypes?.[merchantKey];
 
-  const [report, setReport] = useState<LookupReport | null>(() => (merchantKey ? getMerchantLookup(merchantKey) ?? null : null));
-  const [fromCache, setFromCache] = useState(() => report != null);
-  const [running, setRunning] = useState(false);
+  const jobKey = lookupJobKey(transaction);
+  const jobs = useSyncExternalStore(subscribeLookupJobs, getLookupJobs, getLookupJobs);
+  const job = jobs.get(jobKey);
+  const saved = merchantKey ? appData.merchantLookups?.[merchantKey] ?? null : null;
+  const report: LookupReport | null = job?.report ?? saved;
+  const fromCache = report != null && !job;
+  const running = job?.status === 'running';
   const [used, setUsed] = useState<string | null>(null);
-  const alive = useRef(true);
-  const inFlight = useRef(false);
-  useEffect(() => {
-    alive.current = true;
-    return () => { alive.current = false; };
-  }, []);
 
-  async function run() {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setRunning(true);
-    setFromCache(false);
+  useEffect(() => { acknowledgeLookup(jobKey); }, [jobKey, job?.unseen]);
+
+  function run() {
     setUsed(null);
-    try {
-      const settings = getAISettings();
-      const final = await runLookup(
-        { descriptor: transaction.descriptor, amount: transaction.amount, txnDate: transaction.txnDate, instrument: transaction.instrument },
-        { suggester, categories: pickable.map((c) => ({ id: c.id, name: c.name })), model: settings.model },
-        {
-          aiAvailable: () => checkOllama(settings.ollamaUrl),
-          chat: (system, user, schema) => ollamaJson(settings, system, user, schema),
-          search: searchWeb,
-        },
-        (r) => { if (alive.current) setReport(r); },
-      );
-      // Closed before it finished: keep nothing half-done.
-      if (!alive.current || !merchantKey || trace.bankTransfer) return;
-      await saveMerchantLookup(merchantKey, final);
-      // Fill in the merchant type only where none is known. A saved type (possibly picked by hand) is
-      // never overwritten; the window offers to switch instead.
-      const t = final.reading.merchantType;
-      const existing = getData().merchantTypes?.[merchantKey];
-      if (t && (existing === undefined || (existing === 'unknown' && t !== 'unknown'))) {
-        await addMerchantTypes({ [merchantKey]: t });
-      }
-    } finally {
-      inFlight.current = false;
-      if (alive.current) setRunning(false);
-    }
+    startLookup(transaction, suggester, pickable.map((c) => ({ id: c.id, name: c.name })));
   }
 
-  // Look up on open, unless this merchant already has a saved lookup.
+  // Open with nothing saved and nothing running: start one.
   useEffect(() => {
-    if (!report) void run();
+    if (!report && !job) run();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
