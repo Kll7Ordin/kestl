@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.19.0](https://github.com/Kll7Ordin/kestl/compare/v2.18.3...v2.19.0) (2026-11-12)
+
+
+### Features
+
+* separate categories, and add categories and move groups in Budget Sandbox ([17ec5bb](https://github.com/Kll7Ordin/kestl/commit/17ec5bbba6d2f6d95cc3390c6200d7177bae1140))
+* sort transactions by any column by clicking its header ([620cad2](https://github.com/Kll7Ordin/kestl/commit/620cad2e1c7e2df3a0091f4439a8434f392caec3))
+
+
+### Bug Fixes
+
+* allow saving splits of a negative-amount transaction ([6f4af71](https://github.com/Kll7Ordin/kestl/commit/6f4af71937194cbd9411a326898cd21d9ebccd49))
+
 ## [2.18.3](https://github.com/Kll7Ordin/kestl/compare/v2.18.2...v2.18.3) (2026-11-11)
 
 
