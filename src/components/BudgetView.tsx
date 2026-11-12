@@ -528,6 +528,107 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   const grouped = groupRows(expenseRows, budgetGroups);
   const budgetedCatIds = new Set(rows.map((r) => r.categoryId));
 
+  // Total line — same budget lines as the Budget summary's Expenses figure
+  const totalLine = regularRows.reduce(
+    (s, r) => ({
+      spent: s.spent + r.spent,
+      carry: s.carry + r.carry,
+      avgDiff12: s.avgDiff12 + r.avgDiff12,
+      avgDiff3: s.avgDiff3 + r.avgDiff3,
+      ytd: s.ytd + r.ytd,
+      ytdTarget: s.ytdTarget + r.ytdTarget,
+      ytdDiff: s.ytdDiff + r.ytdDiff,
+    }),
+    { spent: 0, carry: 0, avgDiff12: 0, avgDiff3: 0, ytd: 0, ytdTarget: 0, ytdDiff: 0 },
+  );
+
+  // "$X spent · $Y left/over", centred over the progress bar
+  function renderSpentLabel(spent: number, avail: number, onClick: () => void) {
+    if (avail <= 0 && spent <= 0) return null;
+    return (
+      <span
+        style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', fontSize: '0.8rem', whiteSpace: 'nowrap', cursor: onNavigateToTransactions ? 'pointer' : 'default', userSelect: 'none' }}
+        onClick={onClick}
+      >
+        <strong>${formatAmount(spent, 0)}</strong>
+        <span style={{ opacity: 0.5 }}>{avail > 0 ? ' spent · ' : ' spent'}</span>
+        {avail > 0 && (spent > avail ? (
+          <><strong style={{ color: budgetDiffColor(spent - avail, avail, colorThresholds) }}>${formatAmount(spent - avail, 0)}</strong><span style={{ opacity: 0.5 }}> over</span></>
+        ) : (
+          <><strong style={{ color: '#16a34a' }}>${formatAmount(avail - spent, 0)}</strong><span style={{ opacity: 0.5 }}> left</span></>
+        ))}
+      </span>
+    );
+  }
+
+  function renderProgressBar(spent: number, avail: number, onClick: () => void) {
+    if (avail <= 0) return null;
+    const ratio = spent / avail;
+    const overAmt = spent - avail;
+    const overPct = (ratio - 1) * 100;
+    const barColor = ratio > 1 && overPct > colorThresholds.redPct && overAmt > colorThresholds.redAbs
+      ? '#dc2626'
+      : ratio > 1 && overPct > colorThresholds.orangePct && overAmt > colorThresholds.orangeAbs
+        ? '#d97706'
+        : ratio === 1.0 ? '#166534' : '#16a34a';
+    const trackWidth = Math.max(100, barCapInfo.catWidth - 28);
+    const maxScale = (trackWidth + barCapInfo.overflow) / trackWidth;
+    const isCapped = ratio > 1 && ratio > maxScale;
+    // scaleX operates at compositing stage, bypassing WebKit table-cell clipping
+    const fillScale = isCapped ? maxScale : Math.max(0, ratio);
+    return (
+      <div
+        style={{ position: 'relative', marginTop: 1, marginLeft: 32, marginRight: 10, marginBottom: 12, height: 6, cursor: onNavigateToTransactions ? 'pointer' : 'default' }}
+        onClick={onClick}
+      >
+        {/* Track */}
+        <div style={{ position: 'absolute', inset: 0, background: 'var(--bar-track)', borderRadius: 99 }} />
+        {/* Fill — always 100% wide, scaled via transform (bypasses table-cell clipping) */}
+        <div style={{
+          position: 'absolute', left: 0, top: 0, height: '100%', width: '100%',
+          background: barColor,
+          borderRadius: ratio > 1 ? '99px 0 0 99px' : 99,
+          transformOrigin: 'left center',
+          transform: `scaleX(${fillScale})`,
+        }}>
+          {isCapped && (
+            <div style={{
+              position: 'absolute', right: -8, top: '50%',
+              transform: `translateY(-50%) scaleX(${1 / fillScale})`,
+              width: 0, height: 0,
+              borderTop: '6px solid transparent', borderBottom: '6px solid transparent',
+              borderLeft: `8px solid ${barColor}`, opacity: 0.7,
+            }} />
+          )}
+        </div>
+        {/* End marker — always visible; white overlay when over-budget so it shows above the fill */}
+        <div style={{ position: 'absolute', right: -1, top: '50%', transform: 'translateY(-50%)', width: 3, height: 16, background: ratio > 1 ? 'rgba(255,255,255,0.85)' : 'var(--bar-track-end)', borderRadius: 2, zIndex: 3 }} />
+      </div>
+    );
+  }
+
+  // Header + period cells shared by the Total card and the Expenses table so their columns line up
+  const ytdLabel = ytdMode === 'rolling12' ? '12M' : 'YTD';
+  const metricHeaderCells = (
+    <>
+      <th className="num" style={{ fontSize: '0.65rem', width: 72, padding: '0.55rem 6px' }}>Target</th>
+      <th className="num" style={{ fontSize: '0.65rem', width: 64, padding: '0.55rem 6px' }} title="Average monthly spend over the last 12 months (this month excluded) compared to this month's target">12M ±/mo</th>
+      <th className="num" data-col="avg" style={{ fontSize: '0.65rem', width: 64, padding: '0.55rem 14px 0.55rem 6px' }} title="Average monthly spend over the last 3 months (this month excluded) compared to this month's target">3M ±/mo</th>
+      <th className="num" data-col="ytd" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px 0.55rem 12px', borderLeft: ytdColumnsVisible ? '2px solid var(--border)' : 'none' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdLabel}</span></th>
+      <th className="num" data-col="ytd-target" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdLabel} Tgt</span></th>
+      <th className="num" data-col="ytd-diff" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdLabel} Diff</span></th>
+    </>
+  );
+  function renderPeriodCells(ytd: number, ytdTarget: number, ytdDiff: number) {
+    return (
+      <>
+        <td className="num" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0 12px', verticalAlign: 'top', width: 68, borderLeft: ytdColumnsVisible ? '2px solid var(--border)' : 'none' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>${formatAmount(ytd, 0)}</span></td>
+        <td className="num" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>${formatAmount(ytdTarget, 0)}</span></td>
+        <td className="num" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{formatDiff(ytdDiff)}</span></td>
+      </>
+    );
+  }
+
   const COLS = 8;
   const [y, mon] = month.split('-').map(Number);
   const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -675,6 +776,52 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
         </div>
       )}
 
+      {/* Total budget line — all expense lines combined, laid out like a budget row */}
+      {regularRows.length > 0 && (
+        <div className="card" style={{ marginBottom: '0.75rem' }}>
+          <div className="section-title" style={{ marginTop: 0 }}>Total</div>
+          <table className="data-table budget-table">
+            <thead>
+              <tr>
+                <th style={{ width: 24 }}></th>
+                <th>Category</th>
+                {metricHeaderCells}
+              </tr>
+            </thead>
+            <tbody>
+              <tr className="budget-row-even">
+                <td style={{ width: 24, paddingLeft: 4, paddingRight: 4 }}></td>
+                <td style={{ overflow: 'visible', padding: 0, position: 'relative', zIndex: 3 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', padding: '7px 10px 2px 32px', position: 'relative', minHeight: 30 }}>
+                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}
+                      title={spendFromSavingsGroupIds.size > 0 ? 'Excludes groups set to spend from savings' : undefined}>
+                      All expenses
+                    </span>
+                    {renderSpentLabel(totalLine.spent, totalTarget + totalLine.carry, () => onNavigateToTransactions?.(month))}
+                  </div>
+                  {renderProgressBar(totalLine.spent, totalTarget + totalLine.carry, () => onNavigateToTransactions?.(month))}
+                </td>
+                <td className="num" style={{ fontSize: '0.8rem', width: 72, padding: '7px 6px 0', verticalAlign: 'top' }}>
+                  <span style={{ fontWeight: 700 }}>${formatAmount(totalTarget, 0)}</span>
+                  {totalLine.carry !== 0 && (
+                    <span title="Rollover from previous months" style={{ marginLeft: 6, fontSize: '0.7rem', fontWeight: 600, color: totalLine.carry > 0 ? '#16a34a' : '#dc2626' }}>
+                      {totalLine.carry > 0 ? '+' : '−'}${formatAmount(Math.abs(totalLine.carry), 0)} carried
+                    </span>
+                  )}
+                </td>
+                <td className="num" style={{ fontSize: '0.8rem', fontWeight: 600, width: 64, padding: '7px 6px 0', verticalAlign: 'top', color: budgetDiffColor(totalLine.avgDiff12, totalTarget, colorThresholds) }}>
+                  {formatDiff(totalLine.avgDiff12)}
+                </td>
+                <td className="num" style={{ fontSize: '0.8rem', fontWeight: 600, width: 64, padding: '7px 14px 0 6px', verticalAlign: 'top', color: budgetDiffColor(totalLine.avgDiff3, totalTarget, colorThresholds) }}>
+                  {formatDiff(totalLine.avgDiff3)}
+                </td>
+                {renderPeriodCells(totalLine.ytd, totalLine.ytdTarget, totalLine.ytdDiff)}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {/* Uncategorized sum banner — below summary, above budget rows */}
       {uncatTotal > 0 && (
         <div
@@ -723,12 +870,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
             <tr>
               <th style={{ width: 24 }}></th>
               <th data-col="category">Category</th>
-              <th className="num" style={{ fontSize: '0.65rem', width: 72, padding: '0.55rem 6px' }}>Target</th>
-              <th className="num" style={{ fontSize: '0.65rem', width: 64, padding: '0.55rem 6px' }} title="Average monthly spend over the last 12 months (this month excluded) compared to this month's target">12M ±/mo</th>
-              <th className="num" data-col="avg" style={{ fontSize: '0.65rem', width: 64, padding: '0.55rem 14px 0.55rem 6px' }} title="Average monthly spend over the last 3 months (this month excluded) compared to this month's target">3M ±/mo</th>
-              <th className="num" data-col="ytd" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px 0.55rem 12px', borderLeft: ytdColumnsVisible ? '2px solid var(--border)' : 'none' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdMode === 'rolling12' ? '12M' : 'YTD'}</span></th>
-              <th className="num" data-col="ytd-target" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdMode === 'rolling12' ? '12M Tgt' : 'YTD Tgt'}</span></th>
-              <th className="num" data-col="ytd-diff" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdMode === 'rolling12' ? '12M Diff' : 'YTD Diff'}</span></th>
+              {metricHeaderCells}
             </tr>
           </thead>
           <tbody ref={tableBodyRef}>
@@ -900,66 +1042,10 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                             </span>
                           </div>
                           {/* Centre: spent / left — absolute, centred horizontally over bar */}
-                          {(r.target + r.carry > 0 || r.spent > 0) && (
-                            <span
-                              style={{ position: 'absolute', left: '50%', transform: 'translateX(-50%)', fontSize: '0.8rem', whiteSpace: 'nowrap', cursor: onNavigateToTransactions ? 'pointer' : 'default', userSelect: 'none' }}
-                              onClick={() => onNavigateToTransactions?.(month, r.categoryId)}
-                            >
-                              <strong>${formatAmount(r.spent, 0)}</strong>
-                              <span style={{ opacity: 0.5 }}>{r.target + r.carry > 0 ? ' spent · ' : ' spent'}</span>
-                              {r.target + r.carry > 0 && (r.spent > r.target + r.carry ? (
-                                <><strong style={{ color: budgetDiffColor(r.spent - (r.target + r.carry), r.target + r.carry, colorThresholds) }}>${formatAmount(r.spent - (r.target + r.carry), 0)}</strong><span style={{ opacity: 0.5 }}> over</span></>
-                              ) : (
-                                <><strong style={{ color: '#16a34a' }}>${formatAmount(r.target + r.carry - r.spent, 0)}</strong><span style={{ opacity: 0.5 }}> left</span></>
-                              ))}
-                            </span>
-                          )}
+                          {renderSpentLabel(r.spent, r.target + r.carry, () => onNavigateToTransactions?.(month, r.categoryId))}
                         </div>
                         {/* Progress bar — in flow, directly below text */}
-                        {r.target + r.carry > 0 && (() => {
-                          const ratio = r.spent / (r.target + r.carry);
-                          const overAmt = r.spent - (r.target + r.carry);
-                          const overPct = (ratio - 1) * 100;
-                          const barColor = ratio > 1 && overPct > colorThresholds.redPct && overAmt > colorThresholds.redAbs
-                            ? '#dc2626'
-                            : ratio > 1 && overPct > colorThresholds.orangePct && overAmt > colorThresholds.orangeAbs
-                              ? '#d97706'
-                              : ratio === 1.0 ? '#166534' : '#16a34a';
-                          const trackWidth = Math.max(100, barCapInfo.catWidth - 28);
-                          const maxScale = (trackWidth + barCapInfo.overflow) / trackWidth;
-                          const isCapped = ratio > 1 && ratio > maxScale;
-                          // scaleX operates at compositing stage, bypassing WebKit table-cell clipping
-                          const fillScale = isCapped ? maxScale : Math.max(0, ratio);
-                          return (
-                            <div
-                              style={{ position: 'relative', marginTop: 1, marginLeft: 32, marginRight: 10, marginBottom: 12, height: 6, cursor: onNavigateToTransactions ? 'pointer' : 'default' }}
-                              onClick={() => onNavigateToTransactions?.(month, r.categoryId)}
-                            >
-                              {/* Track */}
-                              <div style={{ position: 'absolute', inset: 0, background: 'var(--bar-track)', borderRadius: 99 }} />
-                              {/* Fill — always 100% wide, scaled via transform (bypasses table-cell clipping) */}
-                              <div style={{
-                                position: 'absolute', left: 0, top: 0, height: '100%', width: '100%',
-                                background: barColor,
-                                borderRadius: ratio > 1 ? '99px 0 0 99px' : 99,
-                                transformOrigin: 'left center',
-                                transform: `scaleX(${fillScale})`,
-                              }}>
-                                {isCapped && (
-                                  <div style={{
-                                    position: 'absolute', right: -8, top: '50%',
-                                    transform: `translateY(-50%) scaleX(${1 / fillScale})`,
-                                    width: 0, height: 0,
-                                    borderTop: '6px solid transparent', borderBottom: '6px solid transparent',
-                                    borderLeft: `8px solid ${barColor}`, opacity: 0.7,
-                                  }} />
-                                )}
-                              </div>
-                              {/* End marker — always visible; white overlay when over-budget so it shows above the fill */}
-                              <div style={{ position: 'absolute', right: -1, top: '50%', transform: 'translateY(-50%)', width: 3, height: 16, background: ratio > 1 ? 'rgba(255,255,255,0.85)' : 'var(--bar-track-end)', borderRadius: 2, zIndex: 3 }} />
-                            </div>
-                          );
-                        })()}
+                        {renderProgressBar(r.spent, r.target + r.carry, () => onNavigateToTransactions?.(month, r.categoryId))}
                       </td>
                       {/* Target column */}
                       <td className="num" style={{ fontSize: '0.8rem', width: 72, padding: '7px 6px 0', verticalAlign: 'top', position: 'relative', zIndex: 2 }}>
@@ -994,9 +1080,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                         {formatDiff(r.avgDiff3)}
                       </td>
                       {/* Period columns — dim when visible; full opacity when hidden so row stripe background is unaffected */}
-                      <td className="num" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0 12px', verticalAlign: 'top', width: 68, borderLeft: ytdColumnsVisible ? '2px solid var(--border)' : 'none' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>${formatAmount(r.ytd, 0)}</span></td>
-                      <td className="num" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>${formatAmount(r.ytdTarget, 0)}</span></td>
-                      <td className="num" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0', verticalAlign: 'top', width: 68 }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{formatDiff(r.ytdDiff)}</span></td>
+                      {renderPeriodCells(r.ytd, r.ytdTarget, r.ytdDiff)}
                   </tr>
                 );
               });
