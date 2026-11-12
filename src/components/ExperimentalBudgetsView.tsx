@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore } from 'react';
 import {
   getData, subscribe,
   saveExperimentalBudget, deleteExperimentalBudget,
+  addCategory, updateCategoryIsIncome, addBudgetGroup, withUndo,
   type ExperimentalBudget, type ExperimentalBudgetItem, type BudgetGroup,
 } from '../db';
 import { SearchableSelect } from './SearchableSelect';
@@ -18,6 +19,8 @@ function isCatIncome(catId: number, categories: ReturnType<typeof getData>['cate
   const cat = categories.find((c) => c.id === catId);
   return cat?.isIncome === true || (cat != null && INCOME_CATEGORY_NAMES.has(cat.name));
 }
+
+const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
 
 // Group expense items by groupId, returns [{group, items}] sorted by group sortOrder, then ungrouped
 function groupItems(
@@ -61,7 +64,6 @@ export function ExperimentalBudgetsView() {
   // Edit item inline: key = `${catId}`
   const [editItemCatId, setEditItemCatId] = useState<number | null>(null);
   const [editTarget, setEditTarget] = useState('');
-  const [editGroupId, setEditGroupId] = useState<number | null | ''>('');
 
   // Rename
   const [renamingId, setRenamingId] = useState<number | null>(null);
@@ -72,6 +74,11 @@ export function ExperimentalBudgetsView() {
   const [addCatId, setAddCatId] = useState<number | ''>('');
   const [addTarget, setAddTarget] = useState('');
   const [addGroupId, setAddGroupId] = useState<number | null>(null);
+  const [addNewCatName, setAddNewCatName] = useState('');
+
+  // New group
+  const [showNewGroup, setShowNewGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
 
   async function handleCreate() {
     const name = createName.trim();
@@ -107,14 +114,34 @@ export function ExperimentalBudgetsView() {
   async function saveItemEdit(budget: ExperimentalBudget, catId: number) {
     const amount = parseFloat(editTarget);
     if (isNaN(amount)) { setEditItemCatId(null); return; }
-    const grp = editGroupId !== '' && editGroupId != null ? budgetGroups.find((g) => g.id === editGroupId) : null;
     const updatedItems = budget.items.map((item) =>
-      item.categoryId === catId
-        ? { ...item, targetAmount: amount, groupId: editGroupId !== '' ? editGroupId : item.groupId, groupName: grp?.name ?? (editGroupId === null ? null : item.groupName) }
-        : item
+      item.categoryId === catId ? { ...item, targetAmount: amount } : item
     );
     await saveExperimentalBudget({ ...budget, items: updatedItems });
     setEditItemCatId(null);
+  }
+
+  async function moveItemToGroup(budget: ExperimentalBudget, catId: number, groupId: number | null) {
+    const grp = groupId != null ? budgetGroups.find((g) => g.id === groupId) : null;
+    const lastOrder = budget.items
+      .filter((i) => !i.isIncome && (i.groupId ?? null) === groupId)
+      .reduce((m, i) => Math.max(m, i.sortOrder ?? 0), -1);
+    const updatedItems = budget.items.map((item) =>
+      item.categoryId === catId
+        ? { ...item, groupId, groupName: grp?.name ?? null, sortOrder: lastOrder + 1 }
+        : item
+    );
+    await saveExperimentalBudget({ ...budget, items: updatedItems });
+  }
+
+  async function handleAddGroup() {
+    const name = newGroupName.trim();
+    if (!name) return;
+    const existing = budgetGroups.find((g) => norm(g.name) === norm(name));
+    const id = existing?.id ?? await addBudgetGroup(name);
+    if (showAddSection === 'expense') setAddGroupId(id);
+    setNewGroupName('');
+    setShowNewGroup(false);
   }
 
   async function deleteItem(budget: ExperimentalBudget, catId: number) {
@@ -123,23 +150,46 @@ export function ExperimentalBudgetsView() {
   }
 
   async function handleAddItem(budget: ExperimentalBudget) {
-    if (addCatId === '' || !addTarget) return;
-    const catId = addCatId as number;
-    if (budget.items.some((i) => i.categoryId === catId)) return;
+    const newName = addNewCatName.trim();
+    if ((addCatId === '' && !newName) || !addTarget) return;
     const amount = parseFloat(addTarget);
     if (isNaN(amount)) return;
-    const income = showAddSection === 'income' ? true : isCatIncome(catId, categories);
-    const grp = !income && addGroupId != null ? budgetGroups.find((g) => g.id === addGroupId) : null;
-    const newItem: ExperimentalBudgetItem = {
-      categoryId: catId,
-      categoryName: catMap.get(catId) ?? '?',
-      groupId: income ? null : addGroupId,
-      groupName: grp?.name ?? null,
-      targetAmount: amount,
-      isIncome: income || undefined,
-    };
-    await saveExperimentalBudget({ ...budget, items: [...budget.items, newItem] });
+    const incomeSection = showAddSection === 'income';
+    // Typing the name of a category that already exists reuses it instead of making a duplicate.
+    const existing = addCatId === '' ? categories.find((c) => norm(c.name) === norm(newName)) : undefined;
+    if (existing && budget.items.some((i) => i.categoryId === existing.id)) {
+      alert(`“${existing.name}” is already in this sandbox.`);
+      return;
+    }
+    await withUndo('Add sandbox item', async () => {
+      let catId: number;
+      let catName: string;
+      if (addCatId !== '') {
+        catId = addCatId as number;
+        catName = catMap.get(catId) ?? '?';
+      } else if (existing) {
+        catId = existing.id;
+        catName = existing.name;
+      } else {
+        catId = await addCategory(newName);
+        if (incomeSection) await updateCategoryIsIncome(catId, true);
+        catName = newName;
+      }
+      if (budget.items.some((i) => i.categoryId === catId)) return;
+      const income = incomeSection ? true : isCatIncome(catId, getData().categories);
+      const grp = !income && addGroupId != null ? budgetGroups.find((g) => g.id === addGroupId) : null;
+      const newItem: ExperimentalBudgetItem = {
+        categoryId: catId,
+        categoryName: catName,
+        groupId: income ? null : addGroupId,
+        groupName: grp?.name ?? null,
+        targetAmount: amount,
+        isIncome: income || undefined,
+      };
+      await saveExperimentalBudget({ ...budget, items: [...budget.items, newItem] });
+    });
     setAddCatId('');
+    setAddNewCatName('');
     setAddTarget('');
     setShowAddSection(null);
   }
@@ -167,7 +217,6 @@ export function ExperimentalBudgetsView() {
   function startEdit(item: ExperimentalBudgetItem) {
     setEditItemCatId(item.categoryId);
     setEditTarget(String(item.targetAmount));
-    setEditGroupId(item.groupId ?? null);
   }
 
   return (
@@ -341,8 +390,14 @@ export function ExperimentalBudgetsView() {
                   <label>Category</label>
                   <SearchableSelect
                     options={availableCats.map((c) => ({ value: c.id, label: c.name }))}
-                    value={addCatId} onChange={(v) => setAddCatId(v === '' ? '' : Number(v))}
+                    value={addCatId} onChange={(v) => { setAddCatId(v === '' ? '' : Number(v)); if (v !== '') setAddNewCatName(''); }}
                     placeholder="Select category…" />
+                </div>
+                <div className="field">
+                  <label>…or new category</label>
+                  <input value={addNewCatName} onChange={(e) => { setAddNewCatName(e.target.value); if (e.target.value) setAddCatId(''); }}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddItem(selectedBudget)}
+                    placeholder="New category name" style={{ width: 170 }} />
                 </div>
                 <div className="field">
                   <label>Target ($)</label>
@@ -350,17 +405,33 @@ export function ExperimentalBudgetsView() {
                     onKeyDown={(e) => e.key === 'Enter' && handleAddItem(selectedBudget)}
                     placeholder="0" style={{ width: 80 }} />
                 </div>
-                <button className="btn btn-primary" onClick={() => handleAddItem(selectedBudget)} disabled={addCatId === '' || !addTarget}>Add</button>
+                <button className="btn btn-primary" onClick={() => handleAddItem(selectedBudget)} disabled={(addCatId === '' && !addNewCatName.trim()) || !addTarget}>Add</button>
                 <button className="btn btn-ghost" onClick={() => setShowAddSection(null)}>Cancel</button>
               </div>
             ) : (
-              <button className="btn btn-ghost btn-sm" onClick={() => { setShowAddSection('income'); setAddCatId(''); setAddTarget(''); }}>+ Add income item</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setShowAddSection('income'); setAddCatId(''); setAddNewCatName(''); setAddTarget(''); }}>+ Add income item</button>
             )}
           </div>
 
           {/* Expense groups */}
           <div className="card" style={{ marginBottom: '1rem' }}>
-            <div className="section-title" style={{ marginTop: 0 }}>Expenses</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+              <div className="section-title" style={{ margin: 0 }}>Expenses</div>
+              <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
+                {showNewGroup ? (
+                  <>
+                    <input value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} autoFocus
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleAddGroup(); if (e.key === 'Escape') setShowNewGroup(false); }}
+                      placeholder="Group name" style={{ width: 150, fontSize: '0.85rem' }} />
+                    <button className="btn btn-primary btn-sm" onClick={handleAddGroup} disabled={!newGroupName.trim()}>Add group</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setShowNewGroup(false)}>Cancel</button>
+                  </>
+                ) : (
+                  <button className="btn btn-ghost btn-sm" title="New groups appear here once a category is moved into them"
+                    onClick={() => { setShowNewGroup(true); setNewGroupName(''); }}>+ New group</button>
+                )}
+              </div>
+            </div>
             {expenseItems.length === 0 && (
               <div style={{ color: 'var(--text-3)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>No expense items yet.</div>
             )}
@@ -382,11 +453,6 @@ export function ExperimentalBudgetsView() {
                                 onChange={(e) => setEditTarget(e.target.value)}
                                 onKeyDown={(e) => { if (e.key === 'Enter') saveItemEdit(selectedBudget, item.categoryId); if (e.key === 'Escape') setEditItemCatId(null); }}
                                 style={{ width: 80, fontSize: '0.88rem' }} autoFocus />
-                              <select value={editGroupId ?? ''} onChange={(e) => setEditGroupId(e.target.value === '' ? null : Number(e.target.value))}
-                                style={{ fontSize: '0.75rem', padding: '0.15rem 0.3rem' }}>
-                                <option value="">Ungrouped</option>
-                                {budgetGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                              </select>
                               <div style={{ display: 'flex', gap: 4 }}>
                                 <button className="btn btn-primary btn-sm" onClick={() => saveItemEdit(selectedBudget, item.categoryId)}>Save</button>
                                 <button className="btn btn-ghost btn-sm" onClick={() => setEditItemCatId(null)}>Cancel</button>
@@ -398,7 +464,15 @@ export function ExperimentalBudgetsView() {
                             </span>
                           )}
                         </td>
-                        <td><button className="btn btn-danger btn-sm" onClick={() => deleteItem(selectedBudget, item.categoryId)}>&times;</button></td>
+                        <td style={{ width: 1, whiteSpace: 'nowrap' }}>
+                          <select value={item.groupId ?? ''} title="Move to another group"
+                            onChange={(e) => moveItemToGroup(selectedBudget, item.categoryId, e.target.value === '' ? null : Number(e.target.value))}
+                            style={{ fontSize: '0.75rem', padding: '0.15rem 0.3rem', maxWidth: 150 }}>
+                            <option value="">Ungrouped</option>
+                            {budgetGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                          </select>
+                        </td>
+                        <td style={{ width: 1 }}><button className="btn btn-danger btn-sm" onClick={() => deleteItem(selectedBudget, item.categoryId)}>&times;</button></td>
                       </tr>
                     ))}
                   </tbody>
@@ -411,8 +485,14 @@ export function ExperimentalBudgetsView() {
                   <label>Category</label>
                   <SearchableSelect
                     options={availableCats.filter((c) => !isCatIncome(c.id, categories)).map((c) => ({ value: c.id, label: c.name }))}
-                    value={addCatId} onChange={(v) => setAddCatId(v === '' ? '' : Number(v))}
+                    value={addCatId} onChange={(v) => { setAddCatId(v === '' ? '' : Number(v)); if (v !== '') setAddNewCatName(''); }}
                     placeholder="Select category…" />
+                </div>
+                <div className="field">
+                  <label>…or new category</label>
+                  <input value={addNewCatName} onChange={(e) => { setAddNewCatName(e.target.value); if (e.target.value) setAddCatId(''); }}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddItem(selectedBudget)}
+                    placeholder="New category name" style={{ width: 170 }} />
                 </div>
                 <div className="field">
                   <label>Group</label>
@@ -428,11 +508,11 @@ export function ExperimentalBudgetsView() {
                     onKeyDown={(e) => e.key === 'Enter' && handleAddItem(selectedBudget)}
                     placeholder="0" style={{ width: 80 }} />
                 </div>
-                <button className="btn btn-primary" onClick={() => handleAddItem(selectedBudget)} disabled={addCatId === '' || !addTarget}>Add</button>
+                <button className="btn btn-primary" onClick={() => handleAddItem(selectedBudget)} disabled={(addCatId === '' && !addNewCatName.trim()) || !addTarget}>Add</button>
                 <button className="btn btn-ghost" onClick={() => setShowAddSection(null)}>Cancel</button>
               </div>
             ) : (
-              <button className="btn btn-ghost btn-sm" style={{ marginTop: '0.25rem' }} onClick={() => { setShowAddSection('expense'); setAddCatId(''); setAddTarget(''); setAddGroupId(null); }}>+ Add expense item</button>
+              <button className="btn btn-ghost btn-sm" style={{ marginTop: '0.25rem' }} onClick={() => { setShowAddSection('expense'); setAddCatId(''); setAddNewCatName(''); setAddTarget(''); setAddGroupId(null); }}>+ Add expense item</button>
             )}
           </div>
         </div>

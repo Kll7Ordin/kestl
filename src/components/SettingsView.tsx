@@ -34,6 +34,8 @@ import {
   changeEncryptionPassword,
   disableEncryption,
   mergeCategories,
+  separateCategory,
+  getCategoryMerchants,
   deleteCustomParser,
   saveCustomParser,
   getColorThresholds,
@@ -83,6 +85,18 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
   const [usageMergeTarget, setUsageMergeTarget] = useState<number | ''>('');
   const [showArchived, setShowArchived] = useState(false);
   const [catSearch, setCatSearch] = useState('');
+  const [sepSourceId, setSepSourceId] = useState<number | ''>('');
+  const [sepName, setSepName] = useState('');
+  const [sepKeys, setSepKeys] = useState<Set<string>>(new Set());
+  const [sepFilter, setSepFilter] = useState('');
+  const [sepDone, setSepDone] = useState<string | null>(null);
+  const sepMerchants = useMemo(
+    () => (sepSourceId === '' ? [] : getCategoryMerchants(sepSourceId)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sepSourceId, data.transactions, data.transactionSplits],
+  );
+  const sepFilterNorm = sepFilter.trim().replace(/\s+/g, ' ').toLowerCase();
+  const shownSepMerchants = sepMerchants.filter((m) => !sepFilterNorm || m.key.includes(sepFilterNorm));
   const activeCategories = useMemo(() => categories.filter((c) => !c.archived), [categories]);
   const archivedCategories = useMemo(() => categories.filter((c) => c.archived), [categories]);
   const searchNorm = catSearch.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -110,6 +124,18 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
     setMergeSourceIds(new Set());
     setMergeTargetId('');
     setMergeConfirm(false);
+  }
+
+  async function handleSeparate() {
+    if (sepSourceId === '' || !sepName.trim()) return;
+    await runBackup('pre-separate');
+    const name = sepName.trim();
+    const n = sepMerchants.filter((m) => sepKeys.has(m.key)).reduce((s, m) => s + m.count, 0);
+    await separateCategory(sepSourceId, name, [...sepKeys]);
+    setSepDone(`Created “${name}”${n ? ` and moved ${n} transaction${n === 1 ? '' : 's'}` : ''}.`);
+    setSepName('');
+    setSepKeys(new Set());
+    setSepFilter('');
   }
 
   return (
@@ -279,9 +305,9 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
 
       {/* Merge Categories */}
       <div className="card" style={{ marginTop: '1rem' }}>
-        <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '0.4rem' }}>Merge Categories</div>
+        <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '0.4rem' }}>Combine Categories</div>
         <p style={{ fontSize: '0.8rem', color: 'var(--text-3)', marginBottom: '0.75rem' }}>
-          Reassign all transactions from source categories to a target, then delete the sources.
+          Merge source categories into a target: transactions, rules and budgets move over, then the sources are deleted.
         </p>
         <div className="field" style={{ marginBottom: '0.75rem' }}>
           <label style={{ fontSize: '0.8rem' }}>Sources to merge (select one or more)</label>
@@ -322,6 +348,73 @@ function CategoriesScreen({ onClose }: { onClose: () => void }) {
             OK Merge
           </button>
         )}
+      </div>
+
+      {/* Separate Category */}
+      <div className="card" style={{ marginTop: '1rem' }}>
+        <div style={{ fontWeight: 700, fontSize: '0.9rem', marginBottom: '0.4rem' }}>Separate a Category</div>
+        <p style={{ fontSize: '0.8rem', color: 'var(--text-3)', marginBottom: '0.75rem' }}>
+          Split a category in two: pick the merchants to move into a new category. Their transactions,
+          split portions, recurring templates and rules that only match them move too. Budgets stay with the original.
+        </p>
+        <div className="row" style={{ flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end', marginBottom: '0.75rem' }}>
+          <div className="field">
+            <label style={{ fontSize: '0.8rem' }}>Category to separate</label>
+            <SearchableSelect
+              options={categoryOptions}
+              value={sepSourceId}
+              onChange={(v) => { setSepSourceId(v as number | ''); setSepKeys(new Set()); setSepFilter(''); setSepDone(null); }}
+              placeholder="Select category…"
+            />
+          </div>
+          <div className="field">
+            <label style={{ fontSize: '0.8rem' }}>New category name</label>
+            <input value={sepName} onChange={(e) => { setSepName(e.target.value); setSepDone(null); }} placeholder="e.g. Restaurants" />
+          </div>
+        </div>
+        {sepSourceId !== '' && (
+          sepMerchants.length === 0 ? (
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-3)' }}>No transactions use this category yet — the new category will start empty.</p>
+          ) : (
+            <div className="field" style={{ marginBottom: '0.75rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <label style={{ fontSize: '0.8rem' }}>Merchants to move ({sepKeys.size} of {sepMerchants.length} selected)</label>
+                <input value={sepFilter} onChange={(e) => setSepFilter(e.target.value)} placeholder="Filter merchants…"
+                  style={{ marginLeft: 'auto', width: 200, maxWidth: '100%', fontSize: '0.8rem' }} />
+                {sepFilterNorm && shownSepMerchants.length > 0 && (
+                  <button className="btn btn-ghost btn-sm" onClick={() => setSepKeys((prev) => new Set([...prev, ...shownSepMerchants.map((m) => m.key)]))}>
+                    Select shown
+                  </button>
+                )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem', maxHeight: 260, overflowY: 'auto', marginTop: '0.35rem' }}>
+                {shownSepMerchants.map((m) => (
+                  <label key={m.key} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.85rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={sepKeys.has(m.key)}
+                      onChange={(e) => setSepKeys((prev) => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(m.key); else next.delete(m.key);
+                        return next;
+                      })}
+                    />
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.label}</span>
+                    <span style={{ color: 'var(--text-3)', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>
+                      {m.count}× · ${formatAmount(Math.abs(m.total), 2)}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )
+        )}
+        {sepSourceId !== '' && (
+          <button className="btn btn-primary btn-sm" disabled={!sepName.trim()} onClick={handleSeparate}>
+            {sepKeys.size > 0 ? `Separate ${sepKeys.size} merchant${sepKeys.size === 1 ? '' : 's'} into new category` : 'Create empty category'}
+          </button>
+        )}
+        {sepDone && <p style={{ fontSize: '0.8rem', color: 'var(--text-3)', marginTop: '0.5rem' }}>{sepDone} Undo is available if this wasn't right.</p>}
       </div>
 
       {mergeConfirm && mergeTargetId !== '' && mergeSourceIds.size > 0 && createPortal(

@@ -528,7 +528,7 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   const grouped = groupRows(expenseRows, budgetGroups);
   const budgetedCatIds = new Set(rows.map((r) => r.categoryId));
 
-  const COLS = 7;
+  const COLS = 8;
   const [y, mon] = month.split('-').map(Number);
   const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const curYear = new Date().getFullYear();
@@ -724,7 +724,8 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
               <th style={{ width: 24 }}></th>
               <th data-col="category">Category</th>
               <th className="num" style={{ fontSize: '0.65rem', width: 72, padding: '0.55rem 6px' }}>Target</th>
-              <th className="num" data-col="avg" style={{ fontSize: '0.65rem', width: 64, padding: '0.55rem 14px 0.55rem 6px' }}>Avg ±/mo</th>
+              <th className="num" style={{ fontSize: '0.65rem', width: 64, padding: '0.55rem 6px' }} title="Average monthly spend over the last 12 months (this month excluded) compared to this month's target">12M ±/mo</th>
+              <th className="num" data-col="avg" style={{ fontSize: '0.65rem', width: 64, padding: '0.55rem 14px 0.55rem 6px' }} title="Average monthly spend over the last 3 months (this month excluded) compared to this month's target">3M ±/mo</th>
               <th className="num" data-col="ytd" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px 0.55rem 12px', borderLeft: ytdColumnsVisible ? '2px solid var(--border)' : 'none' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdMode === 'rolling12' ? '12M' : 'YTD'}</span></th>
               <th className="num" data-col="ytd-target" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdMode === 'rolling12' ? '12M Tgt' : 'YTD Tgt'}</span></th>
               <th className="num" data-col="ytd-diff" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.65rem', width: 68, padding: '0.55rem 6px' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>{ytdMode === 'rolling12' ? '12M Diff' : 'YTD Diff'}</span></th>
@@ -985,9 +986,12 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
                           </span>
                         )}
                       </td>
-                      {/* Avg ±/mo column */}
-                      <td className="num" style={{ fontSize: '0.8rem', fontWeight: 600, width: 64, padding: '7px 14px 0 6px', verticalAlign: 'top', color: budgetDiffColor(r.ytdAvgDiff, r.relevantMonthCount > 0 ? r.ytdTarget / r.relevantMonthCount : r.target, colorThresholds) }}>
-                        {formatDiff(r.ytdAvgDiff)}
+                      {/* Avg ±/mo columns (12M and 3M), against this month's target */}
+                      <td className="num" style={{ fontSize: '0.8rem', fontWeight: 600, width: 64, padding: '7px 6px 0', verticalAlign: 'top', color: budgetDiffColor(r.avgDiff12, r.target, colorThresholds) }}>
+                        {formatDiff(r.avgDiff12)}
+                      </td>
+                      <td className="num" style={{ fontSize: '0.8rem', fontWeight: 600, width: 64, padding: '7px 14px 0 6px', verticalAlign: 'top', color: budgetDiffColor(r.avgDiff3, r.target, colorThresholds) }}>
+                        {formatDiff(r.avgDiff3)}
                       </td>
                       {/* Period columns — dim when visible; full opacity when hidden so row stripe background is unaffected */}
                       <td className="num" style={{ opacity: ytdColumnsVisible ? 0.4 : 1, fontSize: '0.8rem', fontWeight: 400, padding: '7px 6px 0 12px', verticalAlign: 'top', width: 68, borderLeft: ytdColumnsVisible ? '2px solid var(--border)' : 'none' }}><span style={{ visibility: ytdColumnsVisible ? 'visible' : 'hidden' }}>${formatAmount(r.ytd, 0)}</span></td>

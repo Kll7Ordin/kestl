@@ -22,6 +22,25 @@ describe('budget math characterization', () => {
     }
   }
 
+  it('Avg ±/mo uses this month as the baseline, so editing its target moves it', () => {
+    const d = getData();
+    const before = buildRows('2026-03', d.categories, d.budgetGroups, 'ytd').rows.find((r) => r.categoryName === 'Groceries')!;
+    const budgets = d.budgets.map((b) => (b.month === '2026-03' && b.categoryId === before.categoryId ? { ...b, targetAmount: b.targetAmount + 100 } : b));
+    __setDataForTests({ ...d, budgets });
+    const after = buildRows('2026-03', d.categories, d.budgetGroups, 'ytd').rows.find((r) => r.categoryName === 'Groceries')!;
+    expect(after.avgDiff12).toBeCloseTo(before.avgDiff12 - 100);
+    expect(after.avgDiff3).toBeCloseTo(before.avgDiff3 - 100);
+    expect(after.avgMonthCount12).toBe(before.avgMonthCount12);
+  });
+
+  it('Avg ±/mo windows cover at most 12 and 3 prior months', () => {
+    const d = getData();
+    for (const r of buildRows('2026-04', d.categories, d.budgetGroups, 'ytd').rows) {
+      expect(r.avgMonthCount12).toBeLessThanOrEqual(12);
+      expect(r.avgMonthCount3).toBeLessThanOrEqual(3);
+    }
+  });
+
   it('uncategorized and off-budget totals', () => {
     const d = getData();
     const r = buildRows('2026-03', d.categories, d.budgetGroups, 'ytd');

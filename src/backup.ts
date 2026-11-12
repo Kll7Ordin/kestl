@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { flushSave, getFilePath, getBackupSettings, getSaveCount } from './db';
 
-export type BackupReason = 'startup' | 'interval' | 'manual' | 'pre-import' | 'pre-merge' | 'pre-purge';
+export type BackupReason = 'startup' | 'interval' | 'manual' | 'pre-import' | 'pre-merge' | 'pre-separate' | 'pre-purge';
 
 const INTERVAL_MS = 30 * 60 * 1000;
 
