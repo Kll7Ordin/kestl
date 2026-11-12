@@ -221,6 +221,18 @@ export interface ExperimentalBudgetItem {
   targetAmount: number;
   sortOrder?: number;
   isIncome?: boolean;
+  /** Other (historical) categories whose spending counts toward this line's stats. */
+  sourceCategoryIds?: number[];
+  note?: string;
+}
+
+/** A group that lives only inside one sandbox; mapped to a real group by name when applied. */
+export interface SandboxGroup {
+  id: number;
+  name: string;
+  sortOrder: number;
+  note?: string;
+  spendFromSavings?: boolean;
 }
 
 export interface ExperimentalBudget {
@@ -228,6 +240,8 @@ export interface ExperimentalBudget {
   name: string;
   createdAt: string;
   items: ExperimentalBudgetItem[];
+  /** Missing on sandboxes made before sandbox groups existed; see normalizeSandbox(). */
+  groups?: SandboxGroup[];
 }
 
 export interface MergeLog {
@@ -295,6 +309,8 @@ export const DEFAULT_COLOR_THRESHOLDS: ColorThresholds = {
 export interface DisplaySettings {
   ytdColumnsVisible: boolean;
   ytdMode: 'ytd' | 'rolling12';
+  /** 'atTime' = compare past months to the target set back then; 'current' = as if this month's target applied all along. */
+  targetMode?: 'atTime' | 'current';
   experimentalEnabled?: boolean;
   showMortgageTab?: boolean;
   txnAiLookupEnabled?: boolean;
@@ -1276,10 +1292,19 @@ export async function mergeCategories(sourceIds: number[], targetId: number): Pr
     for (const item of eb.items) {
       if (sourceSet.has(item.categoryId)) { item.categoryId = targetId; item.categoryName = targetName || item.categoryName; }
       const prev = merged.get(item.categoryId);
-      if (prev) prev.targetAmount = Math.round((prev.targetAmount + item.targetAmount) * 100) / 100;
-      else merged.set(item.categoryId, item);
+      if (prev) {
+        prev.targetAmount = Math.round((prev.targetAmount + item.targetAmount) * 100) / 100;
+        if (item.sourceCategoryIds?.length) prev.sourceCategoryIds = [...(prev.sourceCategoryIds ?? []), ...item.sourceCategoryIds];
+      } else merged.set(item.categoryId, item);
     }
     eb.items = [...merged.values()];
+    // Tagged historical categories follow the merge too
+    for (const item of eb.items) {
+      if (!item.sourceCategoryIds) continue;
+      const ids = new Set(item.sourceCategoryIds.map((id) => (sourceSet.has(id) ? targetId : id)));
+      ids.delete(item.categoryId);
+      item.sourceCategoryIds = ids.size > 0 ? [...ids] : undefined;
+    }
   }
 
   if (data.mortgage) {

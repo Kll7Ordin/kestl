@@ -1,14 +1,20 @@
-import { useState, useSyncExternalStore } from 'react';
+import { useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   getData, subscribe,
   saveExperimentalBudget, deleteExperimentalBudget,
-  addCategory, updateCategoryIsIncome, addBudgetGroup, withUndo,
-  type ExperimentalBudget, type ExperimentalBudgetItem, type BudgetGroup,
+  addCategory, updateCategoryIsIncome, withUndo, getColorThresholds, getDisplaySettings, updateDisplaySettings,
+  type ExperimentalBudget, type ExperimentalBudgetItem, type SandboxGroup,
 } from '../db';
 import { SearchableSelect } from './SearchableSelect';
 import { formatAmount } from '../utils/format';
 import { INCOME_CATEGORY_NAMES } from '../seed';
 import { ImportBudgetCard } from './ImportBudgetCard';
+import { BudgetTable } from './BudgetTable';
+import { MonthSideArrows } from './MonthSideNav';
+import { useMonthStepper } from './useMonthStepper';
+import { buildSandboxRows } from '../logic/budgetRows';
+import { normalizeSandbox, sandboxGroupsFromLive, nextSandboxGroupId } from '../logic/sandbox';
+import { monthLabel } from '../logic/dateUtils';
 
 function currentMonth(): string {
   const d = new Date();
@@ -22,32 +28,14 @@ function isCatIncome(catId: number, categories: ReturnType<typeof getData>['cate
 
 const norm = (s: string) => s.trim().replace(/\s+/g, ' ').toLowerCase();
 
-// Group expense items by groupId, returns [{group, items}] sorted by group sortOrder, then ungrouped
-function groupItems(
-  items: ExperimentalBudgetItem[],
-  budgetGroups: BudgetGroup[],
-): { group: BudgetGroup | null; items: ExperimentalBudgetItem[] }[] {
-  const grouped = new Map<number | null, ExperimentalBudgetItem[]>();
-  for (const item of items) {
-    const key = item.groupId ?? null;
-    const arr = grouped.get(key) ?? [];
-    arr.push(item);
-    grouped.set(key, arr);
-  }
-  const result: { group: BudgetGroup | null; items: ExperimentalBudgetItem[] }[] = [];
-  for (const g of [...budgetGroups].sort((a, b) => a.sortOrder - b.sortOrder)) {
-    const arr = grouped.get(g.id) ?? [];
-    if (arr.length > 0) result.push({ group: g, items: arr.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) });
-  }
-  const ungrouped = grouped.get(null) ?? [];
-  if (ungrouped.length > 0) result.push({ group: null, items: ungrouped.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0)) });
-  return result;
-}
+const bubbleStyle = { background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '0.875rem 0', overflow: 'hidden' } as const;
+const bubbleTitleStyle = { fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-3)', marginBottom: '0.6rem', paddingLeft: '0.875rem' } as const;
+const cellDivider = { borderRadius: 0, border: 'none', borderRight: '1px solid var(--border)' } as const;
+const cellLast = { borderRadius: 0, border: 'none' } as const;
 
 export function ExperimentalBudgetsView() {
   const appData = useSyncExternalStore(subscribe, getData);
   const { categories, budgets, budgetGroups = [], experimentalBudgets = [] } = appData;
-
   const catMap = new Map(categories.map((c) => [c.id, c.name]));
 
   // Months that have budget data
@@ -55,37 +43,60 @@ export function ExperimentalBudgetsView() {
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [month, setMonth] = useState(currentMonth());
+  const [ytdMode, setYtdMode] = useState(() => getDisplaySettings().ytdMode);
+  const [ytdColumnsVisible, setYtdColumnsVisible] = useState(() => getDisplaySettings().ytdColumnsVisible);
 
   // Create form
   const [showCreate, setShowCreate] = useState(false);
   const [createName, setCreateName] = useState('');
   const [createFromMonth, setCreateFromMonth] = useState(currentMonth());
 
-  // Edit item inline: key = `${catId}`
-  const [editItemCatId, setEditItemCatId] = useState<number | null>(null);
-  const [editTarget, setEditTarget] = useState('');
-
-  // Rename
+  // Rename sandbox
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
-  // Add item
-  const [showAddSection, setShowAddSection] = useState<'income' | 'expense' | null>(null);
-  const [addCatId, setAddCatId] = useState<number | ''>('');
-  const [addTarget, setAddTarget] = useState('');
-  const [addGroupId, setAddGroupId] = useState<number | null>(null);
-  const [addNewCatName, setAddNewCatName] = useState('');
+  // Income inline edit
+  const [editIncomeId, setEditIncomeId] = useState<number | null>(null);
+  const [editIncomeTarget, setEditIncomeTarget] = useState('');
 
-  // New group
-  const [showNewGroup, setShowNewGroup] = useState(false);
+  // Add item / group
+  const [addCatId, setAddCatId] = useState<number | ''>('');
+  const [addNewCatName, setAddNewCatName] = useState('');
+  const [addIsIncome, setAddIsIncome] = useState(false);
+  const [addTarget, setAddTarget] = useState('');
+  const [showAddGroup, setShowAddGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupSavings, setNewGroupSavings] = useState(false);
+
+  // Tagging historical categories onto a line
+  const [tagItemId, setTagItemId] = useState<number | null>(null);
+
+  const rawSelected = experimentalBudgets.find((b) => b.id === selectedId) ?? null;
+  const sandbox = rawSelected ? normalizeSandbox(rawSelected, budgetGroups) : null;
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const result = useMemo(
+    () => (sandbox ? buildSandboxRows(sandbox, month, categories, ytdMode) : null),
+    // appData changes identity on every save, which covers the sandbox and the transactions
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [appData, selectedId, month, ytdMode],
+  );
+  const rows = result?.rows ?? null;
+  const stepMonth = useMonthStepper(month, setMonth, containerRef, rows);
+
+  /** Applies `fn` to the latest copy of the selected sandbox and saves it (one undo step). */
+  async function update(fn: (eb: ExperimentalBudget & { groups: SandboxGroup[] }) => ExperimentalBudget) {
+    const latest = (getData().experimentalBudgets ?? []).find((b) => b.id === selectedId);
+    if (!latest) return;
+    await saveExperimentalBudget(fn(normalizeSandbox(latest, getData().budgetGroups ?? [])));
+  }
+  const mapItems = (eb: ExperimentalBudget, fn: (i: ExperimentalBudgetItem) => ExperimentalBudgetItem) => ({ ...eb, items: eb.items.map(fn) });
 
   async function handleCreate() {
     const name = createName.trim();
     if (!name) return;
-
-    const monthBudgets = budgets.filter((b) => b.month === createFromMonth);
-    const items: ExperimentalBudgetItem[] = monthBudgets.map((b) => {
+    const items: ExperimentalBudgetItem[] = budgets.filter((b) => b.month === createFromMonth).map((b) => {
       const income = isCatIncome(b.categoryId, categories);
       const grp = budgetGroups.find((g) => g.id === b.groupId);
       return {
@@ -98,8 +109,9 @@ export function ExperimentalBudgetsView() {
         isIncome: income,
       };
     });
-
-    const saved = await saveExperimentalBudget({ name, createdAt: new Date().toISOString(), items });
+    const saved = await saveExperimentalBudget({
+      name, createdAt: new Date().toISOString(), items, groups: sandboxGroupsFromLive(budgetGroups, items),
+    });
     setSelectedId(saved.id);
     setShowCreate(false);
     setCreateName('');
@@ -111,53 +123,34 @@ export function ExperimentalBudgetsView() {
     setConfirmDeleteId(null);
   }
 
-  async function saveItemEdit(budget: ExperimentalBudget, catId: number) {
-    const amount = parseFloat(editTarget);
-    if (isNaN(amount)) { setEditItemCatId(null); return; }
-    const updatedItems = budget.items.map((item) =>
-      item.categoryId === catId ? { ...item, targetAmount: amount } : item
-    );
-    await saveExperimentalBudget({ ...budget, items: updatedItems });
-    setEditItemCatId(null);
+  async function handleRename(budget: ExperimentalBudget) {
+    const name = renameValue.trim();
+    if (name) await saveExperimentalBudget({ ...budget, name });
+    setRenamingId(null);
   }
 
-  async function moveItemToGroup(budget: ExperimentalBudget, catId: number, groupId: number | null) {
-    const grp = groupId != null ? budgetGroups.find((g) => g.id === groupId) : null;
-    const lastOrder = budget.items
-      .filter((i) => !i.isIncome && (i.groupId ?? null) === groupId)
-      .reduce((m, i) => Math.max(m, i.sortOrder ?? 0), -1);
-    const updatedItems = budget.items.map((item) =>
-      item.categoryId === catId
-        ? { ...item, groupId, groupName: grp?.name ?? null, sortOrder: lastOrder + 1 }
-        : item
-    );
-    await saveExperimentalBudget({ ...budget, items: updatedItems });
-  }
-
-  async function handleAddGroup() {
+  async function addGroup() {
     const name = newGroupName.trim();
     if (!name) return;
-    const existing = budgetGroups.find((g) => norm(g.name) === norm(name));
-    const id = existing?.id ?? await addBudgetGroup(name);
-    if (showAddSection === 'expense') setAddGroupId(id);
-    setNewGroupName('');
-    setShowNewGroup(false);
+    await update((eb) => ({
+      ...eb,
+      groups: [...eb.groups, {
+        id: nextSandboxGroupId(eb.groups), name,
+        sortOrder: eb.groups.reduce((m, g) => Math.max(m, g.sortOrder), -1) + 1,
+        spendFromSavings: newGroupSavings || undefined,
+      }],
+    }));
+    setNewGroupName(''); setNewGroupSavings(false); setShowAddGroup(false);
   }
 
-  async function deleteItem(budget: ExperimentalBudget, catId: number) {
-    const updatedItems = budget.items.filter((item) => item.categoryId !== catId);
-    await saveExperimentalBudget({ ...budget, items: updatedItems });
-  }
-
-  async function handleAddItem(budget: ExperimentalBudget) {
+  async function addItem() {
+    if (!sandbox) return;
     const newName = addNewCatName.trim();
-    if ((addCatId === '' && !newName) || !addTarget) return;
     const amount = parseFloat(addTarget);
-    if (isNaN(amount)) return;
-    const incomeSection = showAddSection === 'income';
+    if ((addCatId === '' && !newName) || isNaN(amount)) return;
     // Typing the name of a category that already exists reuses it instead of making a duplicate.
     const existing = addCatId === '' ? categories.find((c) => norm(c.name) === norm(newName)) : undefined;
-    if (existing && budget.items.some((i) => i.categoryId === existing.id)) {
+    if (existing && sandbox.items.some((i) => i.categoryId === existing.id)) {
       alert(`“${existing.name}” is already in this sandbox.`);
       return;
     }
@@ -165,66 +158,61 @@ export function ExperimentalBudgetsView() {
       let catId: number;
       let catName: string;
       if (addCatId !== '') {
-        catId = addCatId as number;
+        catId = addCatId;
         catName = catMap.get(catId) ?? '?';
       } else if (existing) {
         catId = existing.id;
         catName = existing.name;
       } else {
         catId = await addCategory(newName);
-        if (incomeSection) await updateCategoryIsIncome(catId, true);
+        if (addIsIncome) await updateCategoryIsIncome(catId, true);
         catName = newName;
       }
-      if (budget.items.some((i) => i.categoryId === catId)) return;
-      const income = incomeSection ? true : isCatIncome(catId, getData().categories);
-      const grp = !income && addGroupId != null ? budgetGroups.find((g) => g.id === addGroupId) : null;
-      const newItem: ExperimentalBudgetItem = {
-        categoryId: catId,
-        categoryName: catName,
-        groupId: income ? null : addGroupId,
-        groupName: grp?.name ?? null,
-        targetAmount: amount,
-        isIncome: income || undefined,
-      };
-      await saveExperimentalBudget({ ...budget, items: [...budget.items, newItem] });
+      const income = addIsIncome || isCatIncome(catId, getData().categories);
+      await update((eb) => {
+        if (eb.items.some((i) => i.categoryId === catId)) return eb;
+        const lastOrder = eb.items.filter((i) => !i.isIncome && i.groupId == null).reduce((m, i) => Math.max(m, i.sortOrder ?? 0), -1);
+        return {
+          ...eb,
+          items: [...eb.items, {
+            categoryId: catId, categoryName: catName, groupId: null, groupName: null,
+            targetAmount: amount, sortOrder: lastOrder + 1, isIncome: income || undefined,
+          }],
+        };
+      });
     });
-    setAddCatId('');
-    setAddNewCatName('');
-    setAddTarget('');
-    setShowAddSection(null);
+    setAddCatId(''); setAddNewCatName(''); setAddTarget(''); setAddIsIncome(false);
   }
 
-  async function handleRename(budget: ExperimentalBudget) {
-    const name = renameValue.trim();
-    if (!name) return;
-    await saveExperimentalBudget({ ...budget, name });
-    setRenamingId(null);
+  async function saveIncomeEdit(catId: number) {
+    const amount = parseFloat(editIncomeTarget);
+    if (!isNaN(amount)) await update((eb) => mapItems(eb, (i) => (i.categoryId === catId ? { ...i, targetAmount: amount } : i)));
+    setEditIncomeId(null);
   }
 
-  const selectedBudget = experimentalBudgets.find((b) => b.id === selectedId) ?? null;
+  // ── Derived for the selected sandbox ──
+  const expenseRows = rows?.filter((r) => !r.isIncome) ?? [];
+  const incomeRows = rows?.filter((r) => r.isIncome) ?? [];
+  const savingsGroupIds = new Set(sandbox?.groups.filter((g) => g.spendFromSavings).map((g) => g.id) ?? []);
+  const regularRows = expenseRows.filter((r) => r.groupId == null || !savingsGroupIds.has(r.groupId));
+  const totalIncome = incomeRows.reduce((s, r) => s + r.target, 0);
+  const totalExpenses = regularRows.reduce((s, r) => s + r.target, 0);
+  const totalSpent = regularRows.reduce((s, r) => s + r.spent, 0);
+  const totalRemaining = regularRows.reduce((s, r) => s + Math.max(0, r.target - r.spent), 0);
+  const net = totalIncome - totalExpenses;
 
-  // For selected budget: split into income and expense items
-  const incomeItems = selectedBudget?.items.filter((i) => i.isIncome) ?? [];
-  const expenseItems = selectedBudget?.items.filter((i) => !i.isIncome) ?? [];
-  const groupedExpenses = selectedBudget ? groupItems(expenseItems, budgetGroups) : [];
-  const totalIncome = incomeItems.reduce((s, i) => s + i.targetAmount, 0);
-  const totalExpenses = expenseItems.reduce((s, i) => s + i.targetAmount, 0);
-
-  // Categories not yet in selected budget (for add form)
-  const usedCatIds = new Set(selectedBudget?.items.map((i) => i.categoryId) ?? []);
-  const availableCats = categories.filter((c) => !usedCatIds.has(c.id) && !c.archived);
-
-  function startEdit(item: ExperimentalBudgetItem) {
-    setEditItemCatId(item.categoryId);
-    setEditTarget(String(item.targetAmount));
-  }
+  // Every category this sandbox already counts (own or tagged) — a category may only feed one line
+  const coveredCatIds = new Set(sandbox?.items.flatMap((i) => [i.categoryId, ...(i.sourceCategoryIds ?? [])]) ?? []);
+  const availableCats = categories.filter((c) => !coveredCatIds.has(c.id) && !c.archived);
+  const tagItem = sandbox?.items.find((i) => i.categoryId === tagItemId) ?? null;
 
   return (
-    <div>
+    <div ref={containerRef} style={{ position: 'relative' }}>
+      {sandbox && <MonthSideArrows month={month} onStep={stepMonth} />}
       <h1 className="view-title">Budget Sandbox</h1>
       <p style={{ fontSize: '0.85rem', opacity: 0.7, marginBottom: '1rem' }}>
-        Create named budget snapshots to try out different plans without affecting your real budget.
-        Apply them to any month from the Budget tab.
+        Try out different plans without affecting your real budget. Changes here (names, groups, order) stay in the
+        sandbox until you apply it to a month from the Budget tab.
       </p>
 
       {/* Import Budget from XLSX */}
@@ -261,7 +249,7 @@ export function ExperimentalBudgetsView() {
               <button className="btn btn-ghost" style={{ flex: '0 0 auto' }} onClick={() => setShowCreate(false)}>Cancel</button>
             </div>
             <p style={{ fontSize: '0.82rem', opacity: 0.65 }}>
-              Creates a snapshot of that month's items. Income and expense categories are preserved from your category settings.
+              Copies that month's items and your budget groups into the sandbox.
             </p>
           </div>
         )}
@@ -292,7 +280,8 @@ export function ExperimentalBudgetsView() {
                 const ebIncome = eb.items.filter((it) => it.isIncome).reduce((s, it) => s + it.targetAmount, 0);
                 const ebExpenses = eb.items.filter((it) => !it.isIncome).reduce((s, it) => s + it.targetAmount, 0);
                 return (
-                  <tr key={eb.id} className={i % 2 === 0 ? 'budget-row-even' : 'budget-row-odd'}>
+                  <tr key={eb.id} className={i % 2 === 0 ? 'budget-row-even' : 'budget-row-odd'}
+                    style={selectedId === eb.id ? { outline: '2px solid var(--accent)', outlineOffset: -2 } : undefined}>
                     <td>
                       {renamingId === eb.id ? (
                         <input value={renameValue} onChange={(e) => setRenameValue(e.target.value)}
@@ -331,189 +320,286 @@ export function ExperimentalBudgetsView() {
         </div>
       )}
 
-      {/* Selected budget detail */}
-      {selectedBudget && (
+      {/* Selected sandbox — laid out like the live budget */}
+      {sandbox && result && (
         <div>
-          {/* Totals summary */}
-          <div style={{ display: 'flex', gap: '1rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
-            <div style={{ flex: 1, minWidth: 160, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '0.75rem 1rem' }}>
-              <div style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-3)', marginBottom: '0.3rem' }}>Total Income</div>
-              <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#16a34a' }}>${formatAmount(totalIncome, 0)}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+            <h2 style={{ margin: 0, fontSize: '1.2rem' }}>{sandbox.name}</h2>
+            <div className="month-nav" style={{ margin: 0 }}>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => stepMonth(-1)}>‹</button>
+              <span style={{ fontWeight: 600, fontSize: '0.95rem', minWidth: 120, textAlign: 'center' }}>{monthLabel(month)}</span>
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => stepMonth(1)}>›</button>
             </div>
-            <div style={{ flex: 1, minWidth: 160, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '0.75rem 1rem' }}>
-              <div style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-3)', marginBottom: '0.3rem' }}>Total Expenses</div>
-              <div style={{ fontSize: '1.3rem', fontWeight: 700, color: '#dc2626' }}>${formatAmount(totalExpenses, 0)}</div>
+            <span style={{ fontSize: '0.78rem', color: 'var(--text-3)' }}>
+              Spending, 12M/3M and {ytdMode === 'rolling12' ? '12M' : 'YTD'} figures are measured from this month, against the sandbox targets.
+            </span>
+          </div>
+
+          {/* Summary bubbles */}
+          <div style={{ display: 'grid', gridTemplateColumns: `${totalIncome > 0 ? 3 : 2}fr ${incomeRows.length > 0 ? 3 : 2}fr`, gap: '1rem', marginBottom: '1rem' }}>
+            <div style={bubbleStyle}>
+              <div style={bubbleTitleStyle}>Budget</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${totalIncome > 0 ? 3 : 2}, 1fr)` }}>
+                {totalIncome > 0 && (
+                  <div className="summary-card" style={cellDivider}>
+                    <span className="summary-label">Income</span>
+                    <span className="summary-value" style={{ color: '#16a34a' }}>${formatAmount(totalIncome, 0)}</span>
+                  </div>
+                )}
+                <div className="summary-card" style={cellDivider}>
+                  <span className="summary-label">Expenses</span>
+                  <span className="summary-value negative">${formatAmount(totalExpenses, 0)}</span>
+                </div>
+                <div className="summary-card" style={cellLast}>
+                  <span className="summary-label">Net</span>
+                  <span className="summary-value" style={{ color: net >= 0 ? '#16a34a' : '#dc2626' }}>${formatAmount(net, 0)}</span>
+                </div>
+              </div>
             </div>
-            <div style={{ flex: 1, minWidth: 160, background: 'var(--bg-2)', border: '1px solid var(--border)', borderRadius: 'var(--radius-lg)', padding: '0.75rem 1rem' }}>
-              <div style={{ fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--text-3)', marginBottom: '0.3rem' }}>Net</div>
-              <div style={{ fontSize: '1.3rem', fontWeight: 700, color: totalIncome - totalExpenses >= 0 ? '#16a34a' : '#dc2626' }}>${formatAmount(totalIncome - totalExpenses, 0)}</div>
+            <div style={bubbleStyle}>
+              <div style={bubbleTitleStyle}>{monthLabel(month)} under this plan</div>
+              <div style={{ display: 'grid', gridTemplateColumns: `repeat(${incomeRows.length > 0 ? 3 : 2}, 1fr)` }}>
+                <div className="summary-card" style={cellDivider}>
+                  <span className="summary-label">Spent</span>
+                  <span className="summary-value">${formatAmount(totalSpent, 0)}</span>
+                </div>
+                <div className="summary-card" style={incomeRows.length > 0 ? cellDivider : cellLast}>
+                  <span className="summary-label">Remaining</span>
+                  <span className="summary-value">${formatAmount(totalRemaining, 0)}</span>
+                </div>
+                {incomeRows.length > 0 && (
+                  <div className="summary-card" style={cellLast}>
+                    <span className="summary-label">Received</span>
+                    <span className="summary-value">${formatAmount(result.allIncomeReceived, 0)}</span>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
 
-          {/* Income section */}
-          <div className="card" style={{ marginBottom: '1rem' }}>
-            <div className="section-title" style={{ marginTop: 0 }}>Income</div>
-            {incomeItems.length === 0 && (
-              <div style={{ color: 'var(--text-3)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>No income items yet.</div>
+          <BudgetTable
+            rows={expenseRows}
+            groups={sandbox.groups}
+            colorThresholds={getColorThresholds()}
+            ytdMode={ytdMode}
+            onYtdModeChange={(m) => { setYtdMode(m); updateDisplaySettings({ ytdMode: m }); }}
+            ytdColumnsVisible={ytdColumnsVisible}
+            onYtdColumnsVisibleChange={(v) => { setYtdColumnsVisible(v); updateDisplaySettings({ ytdColumnsVisible: v }); }}
+            betweenTotalAndTable={(result.offBudgetTotal > 0 || result.offBudgetAvg12 > 0 || result.uncatTotal > 0) && (
+              <div className="card" style={{ borderLeft: '3px solid #6366f1', marginBottom: '0.75rem', padding: '0.6rem 1rem', display: 'flex', alignItems: 'center', gap: '1.25rem', flexWrap: 'wrap', fontSize: '0.8rem' }}>
+                <span title="Spending in categories this sandbox doesn't include or tag">
+                  <span style={{ opacity: 0.8 }}>Outside this sandbox's categories: </span>
+                  <strong style={{ color: '#6366f1' }}>${formatAmount(result.offBudgetTotal, 0)}</strong>
+                  <span style={{ opacity: 0.6 }}> this month · </span>
+                  <strong style={{ color: '#6366f1' }}>${formatAmount(result.offBudgetAvg12, 0)}</strong>
+                  <span style={{ opacity: 0.6 }}>/mo avg (12M)</span>
+                </span>
+                {result.uncatTotal > 0 && (
+                  <span>
+                    <span style={{ opacity: 0.8 }}>Uncategorized this month: </span>
+                    <strong style={{ color: '#d97706' }}>${formatAmount(result.uncatTotal, 0)}</strong>
+                  </span>
+                )}
+              </div>
             )}
-            {incomeItems.length > 0 && (
-              <table className="data-table" style={{ marginBottom: '0.75rem' }}>
+            onReorder={(changes) => {
+              void update((eb) => {
+                const placed = new Map<number, { groupId: number | null; sortOrder: number }>();
+                for (const c of changes) c.categoryIds.forEach((id, i) => placed.set(id, { groupId: c.groupId, sortOrder: i }));
+                return mapItems(eb, (item) => {
+                  const p = placed.get(item.categoryId);
+                  if (!p) return item;
+                  const groupName = eb.groups.find((g) => g.id === p.groupId)?.name ?? null;
+                  return { ...item, groupId: p.groupId, groupName, sortOrder: p.sortOrder };
+                });
+              });
+            }}
+            onReorderGroups={(ids) => {
+              void update((eb) => ({ ...eb, groups: eb.groups.map((g) => ({ ...g, sortOrder: ids.indexOf(g.id) < 0 ? g.sortOrder : ids.indexOf(g.id) })) }));
+            }}
+            onSaveTarget={(catId, amount) => { void update((eb) => mapItems(eb, (i) => (i.categoryId === catId ? { ...i, targetAmount: amount } : i))); }}
+            onDeleteRow={(catId) => { void update((eb) => ({ ...eb, items: eb.items.filter((i) => i.categoryId !== catId) })); }}
+            onRenameRow={(catId, name) => { void update((eb) => mapItems(eb, (i) => (i.categoryId === catId ? { ...i, categoryName: name } : i))); }}
+            onSaveGroup={(id, patch) => {
+              void update((eb) => ({
+                ...mapItems(eb, (i) => (i.groupId === id ? { ...i, groupName: patch.name } : i)),
+                groups: eb.groups.map((g) => (g.id === id ? { ...g, name: patch.name, spendFromSavings: patch.spendFromSavings || undefined } : g)),
+              }));
+            }}
+            onDeleteGroup={(id) => {
+              void update((eb) => ({
+                ...mapItems(eb, (i) => (i.groupId === id ? { ...i, groupId: null, groupName: null } : i)),
+                groups: eb.groups.filter((g) => g.id !== id),
+              }));
+            }}
+            onGroupNote={(id, note) => { void update((eb) => ({ ...eb, groups: eb.groups.map((g) => (g.id === id ? { ...g, note } : g)) })); }}
+            onLineNote={(catId, note) => { void update((eb) => mapItems(eb, (i) => (i.categoryId === catId ? { ...i, note: note || undefined } : i))); }}
+            lineNoteLabel="Note"
+            renderRowExtras={(r) => {
+              const tags = (r.sourceCategoryIds ?? []).map((id) => catMap.get(id) ?? '?');
+              // Untagged: hidden until the row is hovered, like the other row icons
+              return (
+                <span className={tags.length > 0 ? undefined : 'budget-cat-icons'}>
+                  <span
+                    title={tags.length > 0 ? `Also counts spending from: ${tags.join(', ')}` : 'Count spending from other (e.g. old) categories in this line'}
+                    style={{ cursor: 'pointer', fontSize: '0.7rem', opacity: tags.length > 0 ? 0.75 : 0.3, marginLeft: 2, whiteSpace: 'nowrap' }}
+                    onClick={() => setTagItemId(r.categoryId)}
+                  >
+                    🔗{tags.length > 0 && <span style={{ marginLeft: 2 }}>{tags.length}</span>}
+                  </span>
+                </span>
+              );
+            }}
+          />
+
+          {/* Income */}
+          {incomeRows.length > 0 && (
+            <div className="card" style={{ marginBottom: '0.75rem' }}>
+              <div className="section-title" style={{ marginTop: 0 }}>Income</div>
+              <table className="data-table">
                 <thead>
-                  <tr><th>Category</th><th className="num">Target ($)</th><th></th></tr>
+                  <tr>
+                    <th>Category</th>
+                    <th className="num">Expected</th>
+                    <th className="num">Received</th>
+                  </tr>
                 </thead>
                 <tbody>
-                  {incomeItems.map((item, i) => (
-                    <tr key={item.categoryId} className={i % 2 === 0 ? 'budget-row-even' : 'budget-row-odd'}>
-                      <td>{item.categoryName}</td>
-                      <td className="num budget-num">
-                        {editItemCatId === item.categoryId ? (
-                          <input type="number" value={editTarget}
-                            onChange={(e) => setEditTarget(e.target.value)}
-                            onBlur={() => saveItemEdit(selectedBudget, item.categoryId)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') saveItemEdit(selectedBudget, item.categoryId); if (e.key === 'Escape') setEditItemCatId(null); }}
-                            style={{ width: 80, fontSize: '0.88rem' }} autoFocus />
+                  {incomeRows.map((r) => (
+                    <tr key={r.categoryId}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span>{r.categoryName}</span>
+                          <span title="Remove" style={{ cursor: 'pointer', opacity: 0.25, fontSize: '0.75rem', userSelect: 'none' }}
+                            onClick={() => { void update((eb) => ({ ...eb, items: eb.items.filter((i) => i.categoryId !== r.categoryId) })); }}>×</span>
+                        </div>
+                      </td>
+                      <td className="num">
+                        {editIncomeId === r.categoryId ? (
+                          <input type="number" value={editIncomeTarget} onChange={(e) => setEditIncomeTarget(e.target.value)}
+                            onBlur={() => saveIncomeEdit(r.categoryId)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') saveIncomeEdit(r.categoryId); if (e.key === 'Escape') setEditIncomeId(null); }}
+                            style={{ width: 72, fontSize: '0.88rem' }} autoFocus />
                         ) : (
-                          <span style={{ cursor: 'pointer' }} onClick={() => startEdit(item)}>
-                            ${formatAmount(item.targetAmount, 0)}
+                          <span style={{ cursor: 'pointer' }} onClick={() => { setEditIncomeId(r.categoryId); setEditIncomeTarget(String(r.target)); }}>
+                            ${formatAmount(r.target, 0)}
                           </span>
                         )}
                       </td>
-                      <td><button className="btn btn-danger btn-sm" onClick={() => deleteItem(selectedBudget, item.categoryId)}>&times;</button></td>
+                      <td className={`num ${r.spent > 0 && r.spent >= r.target ? 'positive' : ''}`}>${formatAmount(r.spent, 0)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            )}
-            {showAddSection === 'income' ? (
-              <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end', gap: '0.5rem' }}>
-                <div className="field">
-                  <label>Category</label>
-                  <SearchableSelect
-                    options={availableCats.map((c) => ({ value: c.id, label: c.name }))}
-                    value={addCatId} onChange={(v) => { setAddCatId(v === '' ? '' : Number(v)); if (v !== '') setAddNewCatName(''); }}
-                    placeholder="Select category…" />
-                </div>
-                <div className="field">
-                  <label>…or new category</label>
-                  <input value={addNewCatName} onChange={(e) => { setAddNewCatName(e.target.value); if (e.target.value) setAddCatId(''); }}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddItem(selectedBudget)}
-                    placeholder="New category name" style={{ width: 170 }} />
-                </div>
-                <div className="field">
-                  <label>Target ($)</label>
-                  <input type="number" value={addTarget} onChange={(e) => setAddTarget(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddItem(selectedBudget)}
-                    placeholder="0" style={{ width: 80 }} />
-                </div>
-                <button className="btn btn-primary" onClick={() => handleAddItem(selectedBudget)} disabled={(addCatId === '' && !addNewCatName.trim()) || !addTarget}>Add</button>
-                <button className="btn btn-ghost" onClick={() => setShowAddSection(null)}>Cancel</button>
-              </div>
-            ) : (
-              <button className="btn btn-ghost btn-sm" onClick={() => { setShowAddSection('income'); setAddCatId(''); setAddNewCatName(''); setAddTarget(''); }}>+ Add income item</button>
-            )}
-          </div>
-
-          {/* Expense groups */}
-          <div className="card" style={{ marginBottom: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
-              <div className="section-title" style={{ margin: 0 }}>Expenses</div>
-              <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.35rem', alignItems: 'center' }}>
-                {showNewGroup ? (
-                  <>
-                    <input value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)} autoFocus
-                      onKeyDown={(e) => { if (e.key === 'Enter') handleAddGroup(); if (e.key === 'Escape') setShowNewGroup(false); }}
-                      placeholder="Group name" style={{ width: 150, fontSize: '0.85rem' }} />
-                    <button className="btn btn-primary btn-sm" onClick={handleAddGroup} disabled={!newGroupName.trim()}>Add group</button>
-                    <button className="btn btn-ghost btn-sm" onClick={() => setShowNewGroup(false)}>Cancel</button>
-                  </>
-                ) : (
-                  <button className="btn btn-ghost btn-sm" title="New groups appear here once a category is moved into them"
-                    onClick={() => { setShowNewGroup(true); setNewGroupName(''); }}>+ New group</button>
-                )}
-              </div>
             </div>
-            {expenseItems.length === 0 && (
-              <div style={{ color: 'var(--text-3)', fontSize: '0.85rem', marginBottom: '0.5rem' }}>No expense items yet.</div>
-            )}
-            {groupedExpenses.map(({ group, items: grpItems }) => (
-              <div key={group?.id ?? 'ungrouped'} style={{ marginBottom: '0.75rem' }}>
-                <div style={{ fontSize: '0.78rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--text-3)', padding: '0.25rem 0', borderBottom: '1px solid var(--border)', marginBottom: '0.25rem', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>{group?.name ?? 'Ungrouped'}</span>
-                  <span>${formatAmount(grpItems.reduce((s, i) => s + i.targetAmount, 0), 0)}</span>
+          )}
+
+          {/* Groups + add item */}
+          <div className="card">
+            <div className="section-title" style={{ marginTop: 0 }}>Budget groups</div>
+            <div style={{ marginBottom: '1rem' }}>
+              {showAddGroup ? (
+                <div className="row" style={{ alignItems: 'flex-end' }}>
+                  <div className="field">
+                    <label>Group name</label>
+                    <input value={newGroupName} onChange={(e) => setNewGroupName(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && addGroup()} placeholder="Enter name" autoFocus />
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', cursor: 'pointer', marginBottom: '0.65rem', whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={newGroupSavings} onChange={(e) => setNewGroupSavings(e.target.checked)} />
+                    Spend from Savings
+                  </label>
+                  <button className="btn btn-primary" onClick={addGroup} style={{ marginBottom: '0.65rem' }}>Create</button>
+                  <button className="btn btn-ghost" onClick={() => { setShowAddGroup(false); setNewGroupName(''); setNewGroupSavings(false); }} style={{ marginBottom: '0.65rem' }}>Cancel</button>
                 </div>
-                <table className="data-table">
-                  <tbody>
-                    {grpItems.map((item, i) => (
-                      <tr key={item.categoryId} className={i % 2 === 0 ? 'budget-row-even' : 'budget-row-odd'}>
-                        <td>{item.categoryName}</td>
-                        <td className="num budget-num">
-                          {editItemCatId === item.categoryId ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
-                              <input type="number" value={editTarget}
-                                onChange={(e) => setEditTarget(e.target.value)}
-                                onKeyDown={(e) => { if (e.key === 'Enter') saveItemEdit(selectedBudget, item.categoryId); if (e.key === 'Escape') setEditItemCatId(null); }}
-                                style={{ width: 80, fontSize: '0.88rem' }} autoFocus />
-                              <div style={{ display: 'flex', gap: 4 }}>
-                                <button className="btn btn-primary btn-sm" onClick={() => saveItemEdit(selectedBudget, item.categoryId)}>Save</button>
-                                <button className="btn btn-ghost btn-sm" onClick={() => setEditItemCatId(null)}>Cancel</button>
-                              </div>
-                            </div>
-                          ) : (
-                            <span style={{ cursor: 'pointer' }} onClick={() => startEdit(item)}>
-                              ${formatAmount(item.targetAmount, 0)}
-                            </span>
-                          )}
-                        </td>
-                        <td style={{ width: 1, whiteSpace: 'nowrap' }}>
-                          <select value={item.groupId ?? ''} title="Move to another group"
-                            onChange={(e) => moveItemToGroup(selectedBudget, item.categoryId, e.target.value === '' ? null : Number(e.target.value))}
-                            style={{ fontSize: '0.75rem', padding: '0.15rem 0.3rem', maxWidth: 150 }}>
-                            <option value="">Ungrouped</option>
-                            {budgetGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                          </select>
-                        </td>
-                        <td style={{ width: 1 }}><button className="btn btn-danger btn-sm" onClick={() => deleteItem(selectedBudget, item.categoryId)}>&times;</button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              ) : (
+                <button className="btn btn-ghost" onClick={() => setShowAddGroup(true)}>+ Add group</button>
+              )}
+            </div>
+            <div className="section-title">Add budget item</div>
+            <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>Existing category</label>
+                <SearchableSelect options={availableCats.map((c) => ({ value: c.id, label: c.name }))}
+                  value={addCatId}
+                  onChange={(v) => { setAddCatId(v === '' ? '' : Number(v)); if (v !== '') setAddNewCatName(''); }}
+                  placeholder="Select..." />
               </div>
-            ))}
-            {showAddSection === 'expense' ? (
-              <div className="row" style={{ flexWrap: 'wrap', alignItems: 'flex-end', gap: '0.5rem', marginTop: '0.5rem' }}>
-                <div className="field">
-                  <label>Category</label>
-                  <SearchableSelect
-                    options={availableCats.filter((c) => !isCatIncome(c.id, categories)).map((c) => ({ value: c.id, label: c.name }))}
-                    value={addCatId} onChange={(v) => { setAddCatId(v === '' ? '' : Number(v)); if (v !== '') setAddNewCatName(''); }}
-                    placeholder="Select category…" />
-                </div>
-                <div className="field">
-                  <label>…or new category</label>
-                  <input value={addNewCatName} onChange={(e) => { setAddNewCatName(e.target.value); if (e.target.value) setAddCatId(''); }}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddItem(selectedBudget)}
-                    placeholder="New category name" style={{ width: 170 }} />
-                </div>
-                <div className="field">
-                  <label>Group</label>
-                  <select value={addGroupId ?? ''} onChange={(e) => setAddGroupId(e.target.value === '' ? null : Number(e.target.value))}
-                    style={{ padding: '0.35rem 0.5rem', fontSize: '0.9rem' }}>
-                    <option value="">Ungrouped</option>
-                    {budgetGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-                  </select>
-                </div>
-                <div className="field">
-                  <label>Target ($)</label>
-                  <input type="number" value={addTarget} onChange={(e) => setAddTarget(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleAddItem(selectedBudget)}
-                    placeholder="0" style={{ width: 80 }} />
-                </div>
-                <button className="btn btn-primary" onClick={() => handleAddItem(selectedBudget)} disabled={(addCatId === '' && !addNewCatName.trim()) || !addTarget}>Add</button>
-                <button className="btn btn-ghost" onClick={() => setShowAddSection(null)}>Cancel</button>
+              <div style={{ display: 'flex', alignItems: 'center', padding: '0 0.25rem', opacity: 0.4, fontSize: '0.8rem', marginBottom: '0.65rem' }}>or</div>
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>New category name</label>
+                <input value={addNewCatName}
+                  onChange={(e) => { setAddNewCatName(e.target.value); if (e.target.value) setAddCatId(''); }}
+                  placeholder="Type to create new…"
+                  onKeyDown={(e) => e.key === 'Enter' && addItem()} />
               </div>
-            ) : (
-              <button className="btn btn-ghost btn-sm" style={{ marginTop: '0.25rem' }} onClick={() => { setShowAddSection('expense'); setAddCatId(''); setAddNewCatName(''); setAddTarget(''); setAddGroupId(null); }}>+ Add expense item</button>
+              {addNewCatName.trim() && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.82rem', cursor: 'pointer', whiteSpace: 'nowrap', marginBottom: '0.65rem' }}>
+                  <input type="checkbox" checked={addIsIncome} onChange={(e) => setAddIsIncome(e.target.checked)} />
+                  Income
+                </label>
+              )}
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>Target ($)</label>
+                <input type="number" value={addTarget} onChange={(e) => setAddTarget(e.target.value)} placeholder="0"
+                  onKeyDown={(e) => e.key === 'Enter' && addItem()} />
+              </div>
+              <button className="btn btn-primary" onClick={addItem} style={{ marginBottom: '0.65rem' }}
+                disabled={!addTarget || (addCatId === '' && !addNewCatName.trim())}>
+                Add
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Tag historical categories onto a line */}
+      {tagItem && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => setTagItemId(null)}>
+          <div style={{ background: 'var(--card-bg)', borderRadius: 'var(--radius-lg)', padding: '1.5rem', width: 420, maxWidth: '90vw' }}
+            onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 0.5rem' }}>Count other categories in “{tagItem.categoryName}”</h3>
+            <p style={{ fontSize: '0.82rem', color: 'var(--text-2)', margin: '0 0 1rem' }}>
+              Spending in these categories is added to this line's spent, 12M/3M and {ytdMode === 'rolling12' ? '12M' : 'YTD'} figures —
+              useful when an old category is being folded into a new one. Your transactions aren't changed.
+            </p>
+            {(tagItem.sourceCategoryIds ?? []).length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginBottom: '0.75rem' }}>
+                {(tagItem.sourceCategoryIds ?? []).map((id) => (
+                  <span key={id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'var(--bg-3)', border: '1px solid var(--border)', borderRadius: 99, padding: '0.15rem 0.55rem', fontSize: '0.8rem' }}>
+                    {catMap.get(id) ?? '?'}
+                    <span style={{ cursor: 'pointer', opacity: 0.5 }} title="Remove"
+                      onClick={() => {
+                        void update((eb) => mapItems(eb, (i) => {
+                          if (i.categoryId !== tagItem.categoryId) return i;
+                          const next = (i.sourceCategoryIds ?? []).filter((x) => x !== id);
+                          return { ...i, sourceCategoryIds: next.length > 0 ? next : undefined };
+                        }));
+                      }}>×</span>
+                  </span>
+                ))}
+              </div>
             )}
+            <div className="field" style={{ marginBottom: '1rem' }}>
+              <label>Add a category</label>
+              <SearchableSelect
+                options={categories
+                  .filter((c) => !coveredCatIds.has(c.id))
+                  .map((c) => ({ value: c.id, label: c.archived ? `${c.name} (archived)` : c.name }))}
+                value=""
+                onChange={(v) => {
+                  if (v === '') return;
+                  const id = Number(v);
+                  void update((eb) => mapItems(eb, (i) => (i.categoryId === tagItem.categoryId
+                    ? { ...i, sourceCategoryIds: [...(i.sourceCategoryIds ?? []), id] }
+                    : i)));
+                }}
+                placeholder="Search categories..." />
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button className="btn btn-primary" onClick={() => setTagItemId(null)}>Done</button>
+            </div>
           </div>
         </div>
       )}
