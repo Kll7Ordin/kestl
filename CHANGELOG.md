@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.20.0](https://github.com/Kll7Ordin/kestl/compare/v2.19.0...v2.20.0) (2026-11-12)
+
+
+### Features
+
+* add total budget line above expenses ([907e0ce](https://github.com/Kll7Ordin/kestl/commit/907e0ce7a33e39da7508280a4445c24e8bda6583))
+* add total budget line above expenses ([3775016](https://github.com/Kll7Ordin/kestl/commit/3775016eef570ca437c5fa1d817b326f592d2e0f))
+
 ## [2.19.0](https://github.com/Kll7Ordin/kestl/compare/v2.18.3...v2.19.0) (2026-11-12)
 
 
