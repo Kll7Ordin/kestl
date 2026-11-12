@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.21.0](https://github.com/Kll7Ordin/kestl/compare/v2.20.0...v2.21.0) (2026-11-12)
+
+
+### Features
+
+* target mode toggle, month side arrows, sandbox parity with live budget ([7f25cff](https://github.com/Kll7Ordin/kestl/commit/7f25cff52563c1c6273fea212c6f43ef1ccedf82))
+
 ## [2.20.0](https://github.com/Kll7Ordin/kestl/compare/v2.19.0...v2.20.0) (2026-11-12)
 
 
