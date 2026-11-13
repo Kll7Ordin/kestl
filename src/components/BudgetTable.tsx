@@ -519,6 +519,30 @@ export function BudgetTable(props: BudgetTableProps) {
     { target: 0, spent: 0, carry: 0, avgDiff12: 0, avgDiff3: 0, ytd: 0, ytdTarget: 0, ytdDiff: 0 },
   );
 
+  function SegToggle<T extends string>({ label, value, onChange, options }: { label: string; value: T; onChange: (v: T) => void; options: { value: T; label: string; title: string }[] }) {
+    return (
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: '0.6rem', opacity: 0.5, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+        <div style={{ display: 'inline-flex', border: '1px solid var(--border)', borderRadius: 6, overflow: 'hidden' }}>
+          {options.map((o) => (
+            <button
+              key={o.value}
+              title={o.title}
+              onClick={() => onChange(o.value)}
+              style={{
+                fontSize: '0.65rem', padding: '0.15rem 0.5rem', border: 'none', cursor: 'pointer',
+                background: o.value === value ? 'var(--accent, #6366f1)' : 'transparent',
+                color: o.value === value ? '#fff' : 'inherit',
+                fontWeight: o.value === value ? 700 : 400,
+                opacity: o.value === value ? 1 : 0.6,
+              }}
+            >{o.label}</button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   const toggleBtnStyle = { fontSize: '0.65rem', padding: '0.1rem 0.4rem', opacity: 0.55 };
   const grouped = groupRows(rows, groups);
 
@@ -526,13 +550,12 @@ export function BudgetTable(props: BudgetTableProps) {
     <>
       {/* Total budget line — all expense lines combined, laid out like a budget row */}
       {totalRows.length > 0 && (
-        <div className="card" style={{ marginBottom: '0.75rem' }}>
-          <div className="section-title" style={{ marginTop: 0 }}>Total</div>
+        <div className="card" style={{ marginBottom: '0.75rem', borderLeft: '3px solid var(--accent, #6366f1)', background: 'var(--bg-3)' }}>
           <table className="data-table budget-table">
             <thead>
               <tr>
                 <th style={{ width: 24 }}></th>
-                <th>Category</th>
+                <th></th>
                 {metricHeaderCells}
               </tr>
             </thead>
@@ -541,9 +564,9 @@ export function BudgetTable(props: BudgetTableProps) {
                 <td style={{ width: 24, paddingLeft: 4, paddingRight: 4 }}></td>
                 <td style={{ overflow: 'visible', padding: 0, position: 'relative', zIndex: 3 }}>
                   <div style={{ display: 'flex', alignItems: 'center', padding: '7px 10px 2px 32px', position: 'relative', minHeight: 30 }}>
-                    <span style={{ fontSize: '0.8rem', fontWeight: 600 }}
+                    <span style={{ fontSize: '0.85rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' }}
                       title={savingsGroupIds.size > 0 ? 'Excludes groups set to spend from savings' : undefined}>
-                      All expenses
+                      Total
                     </span>
                     {renderSpentLabel(total.spent, total.target + total.carry, onOpenAll)}
                   </div>
@@ -574,25 +597,25 @@ export function BudgetTable(props: BudgetTableProps) {
           <span>Expenses</span>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: '0.25rem' }}>
             {props.onTargetModeChange && (
-              <button
-                className="btn btn-ghost btn-sm"
-                title={targetMode === 'current'
-                  ? "Past months are compared to this month's target, as if it applied all along. Click to use the target set at the time."
-                  : "Past months are compared to the target set at the time. Click to compare against this month's target instead."}
-                style={toggleBtnStyle}
-                onClick={() => props.onTargetModeChange!(targetMode === 'current' ? 'atTime' : 'current')}
-              >
-                {targetMode === 'current' ? 'Tgt: now' : 'Tgt: then'}
-              </button>
+              <SegToggle
+                label="Target"
+                value={targetMode}
+                onChange={(m) => props.onTargetModeChange!(m)}
+                options={[
+                  { value: 'atTime', label: 'Then', title: 'Compare past months to the target set at the time' },
+                  { value: 'current', label: 'Now', title: "Compare past months to this month's target, as if it applied all along" },
+                ]}
+              />
             )}
-            <button
-              className="btn btn-ghost btn-sm"
-              title={ytdMode === 'rolling12' ? 'Switch to year-to-date' : 'Switch to rolling 12 months'}
-              style={toggleBtnStyle}
-              onClick={() => props.onYtdModeChange(ytdMode === 'rolling12' ? 'ytd' : 'rolling12')}
-            >
-              {ytdLabel}
-            </button>
+            <SegToggle
+              label="Period"
+              value={ytdMode}
+              onChange={(m) => props.onYtdModeChange(m)}
+              options={[
+                { value: 'ytd', label: 'YTD', title: 'Year to date' },
+                { value: 'rolling12', label: '12M', title: 'Rolling 12 months' },
+              ]}
+            />
             <button
               className="btn btn-ghost btn-sm"
               title={ytdColumnsVisible ? 'Hide period columns' : 'Show period columns'}
