@@ -599,7 +599,7 @@ export function BudgetTable(props: BudgetTableProps) {
             {props.onTargetModeChange && (
               <SegToggle
                 label="Target"
-                value={targetMode}
+                value={targetMode ?? 'atTime' as TargetMode}
                 onChange={(m) => props.onTargetModeChange!(m)}
                 options={[
                   { value: 'atTime', label: 'Then', title: 'Compare past months to the target set at the time' },
