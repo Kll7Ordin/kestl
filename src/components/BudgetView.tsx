@@ -10,7 +10,6 @@ import { BudgetTable } from './BudgetTable';
 import { budgetDiffColor } from '../utils/budgetFormat';
 import { MonthSideArrows } from './MonthSideNav';
 import { useMonthStepper } from './useMonthStepper';
-import { projectCurrentMonth, type MonthProjection } from '../logic/forecast';
 
 function currentMonth(): string {
   const d = new Date();
@@ -48,7 +47,6 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
   const [allIncomeReceived, setAllIncomeReceived] = useState(0);
   const [uncatTotal, setUncatTotal] = useState(0);
   const [offBudgetTotal, setOffBudgetTotal] = useState(0);
-  const [projection, setProjection] = useState<MonthProjection | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [colorThresholds, setColorThresholdsState] = useState(() => getColorThresholds());
   const [ytdColumnsVisible, setYtdColumnsVisible] = useState(() => getDisplaySettings().ytdColumnsVisible);
@@ -78,7 +76,6 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
       setAllIncomeReceived(result.allIncomeReceived);
       setUncatTotal(result.uncatTotal);
       setOffBudgetTotal(result.offBudgetTotal);
-      setProjection(month === currentMonth() ? projectCurrentMonth(d, month) : null);
       setColorThresholdsState(getColorThresholds());
     }
     refresh();
@@ -329,15 +326,6 @@ export function BudgetView({ search = '', onNavigateToTransactions, onNavigateTo
         </div>
         );
       })()}
-
-      {projection && (
-        <div style={{ fontSize: '0.8rem', marginBottom: '0.75rem', color: 'var(--text-2)' }}>
-          Projected month-end:{' '}
-          <strong style={{ color: projection.projectedNet >= 0 ? '#16a34a' : '#dc2626' }}>
-            {projection.projectedNet >= 0 ? '+' : '−'}${formatAmount(Math.abs(projection.projectedNet), 0)}
-          </strong>
-        </div>
-      )}
 
       <BudgetTable
         rows={expenseRows}

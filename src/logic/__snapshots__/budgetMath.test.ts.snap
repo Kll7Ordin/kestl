@@ -304,8 +304,8 @@ exports[`budget math characterization > buildRows 2026-03 rolling12 1`] = `
       "ytdTarget": 4500,
     },
     {
-      "avgDiff12": -1333.3333333333335,
-      "avgDiff3": -1333.3333333333335,
+      "avgDiff12": -1333.3333333333333,
+      "avgDiff3": -1333.3333333333333,
       "avgMonthCount12": 3,
       "avgMonthCount3": 3,
       "budgetNote": undefined,
@@ -413,8 +413,8 @@ exports[`budget math characterization > buildRows 2026-03 ytd 1`] = `
       "ytdTarget": 3000,
     },
     {
-      "avgDiff12": -1333.3333333333335,
-      "avgDiff3": -1333.3333333333335,
+      "avgDiff12": -1333.3333333333333,
+      "avgDiff3": -1333.3333333333333,
       "avgMonthCount12": 3,
       "avgMonthCount3": 3,
       "budgetNote": undefined,

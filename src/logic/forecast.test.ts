@@ -1,22 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { projectCurrentMonth, forecastMonths } from './forecast';
+import { forecastMonths } from './forecast';
 import { richFixture, makeTxn } from '../test/fixtures';
 
 describe('forecast', () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2026-03-15T12:00:00')); });
   afterEach(() => vi.useRealTimers());
-
-  it('projects the current month', () => {
-    const d = richFixture();
-    const p = projectCurrentMonth(d, '2026-03');
-    expect(p.received).toBe(4000);
-    expect(p.expectedIncomeRemaining).toBe(0);
-    // spent: rent 1500 + groceries (100+80-30=150) + fun 35 + hydro 120 + uncategorized 22.5 ; airline (Vacation) excluded
-    expect(p.spent).toBe(1827.5);
-    // planned remaining: groceries 500-150=350, rent 0, utilities 150-120=30
-    expect(p.plannedRemaining).toBe(380);
-    expect(p.projectedNet).toBe(4000 - 1827.5 - 380);
-  });
 
   it('forecasts future months from the latest budgeted month', () => {
     const f = forecastMonths(richFixture(), 3);

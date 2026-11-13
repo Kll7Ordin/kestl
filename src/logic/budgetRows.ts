@@ -119,12 +119,13 @@ function lineStats(
   const relevantPriorMonths = ctx.priorMonths.filter(relevant);
   const ytdTarget = relevantPriorMonths.reduce((s, pm) => s + (targetInMonth(pm) ?? 0), 0);
 
-  // Avg ±/mo: average net spend over the last N tracked months (current month excluded),
-  // measured against THIS month's target so editing the target moves it right away.
+  // Avg ±/mo: average of (net spend − target) over the last N tracked months (current month excluded).
+  // The target per month follows the Then/Now toggle: 'current' applies this month's target to every
+  // month, 'atTime' uses the target that was set in each month.
   const avgDiff = (window: string[]) => {
     const used = window.filter(relevant);
-    const spent = used.reduce((s, pm) => s + net(pm), 0);
-    return { diff: used.length > 0 ? spent / used.length - target : 0, count: used.length };
+    const total = used.reduce((s, pm) => s + net(pm) - (targetInMonth(pm) ?? target), 0);
+    return { diff: used.length > 0 ? total / used.length : 0, count: used.length };
   };
   const a12 = avgDiff(ctx.avgWindow12);
   const a3 = avgDiff(ctx.avgWindow3);
