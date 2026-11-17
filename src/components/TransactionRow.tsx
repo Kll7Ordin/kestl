@@ -57,6 +57,12 @@ interface TxnRowProps {
   actions: MutableRefObject<TxnRowActions>;
 }
 
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/** "2026-03-15" → "Mar 2026" */
+function monthStamp(date: string): string {
+  return `${MONTHS[Number(date.slice(5, 7)) - 1] ?? date.slice(5, 7)} ${date.slice(0, 4)}`;
+}
+
 export const TxnRow = memo(function TxnRow({
   t, rowClass, splits, isEditingCategory, suggestionCatId, suggestionName, suggestionTitle, suggestionFromAi, suggestion2CatId, suggestion2Name,
   catMap, catColorMap, categoryOptions, aiLookupEnabled, lookupState, returnedItems, refundDeducted, amazonFlagLabel, amazonFlagDetail, actions,
@@ -74,7 +80,7 @@ export const TxnRow = memo(function TxnRow({
           <>
             {t.originalTxnDate}
             <span style={{ marginLeft: 6, fontSize: '0.8em', opacity: 0.7 }} title="Moved: counted in a different month">
-              counted in {t.txnDate.slice(0, 7)}
+              counted in {monthStamp(t.txnDate)}
             </span>
           </>
         ) : t.txnDate}

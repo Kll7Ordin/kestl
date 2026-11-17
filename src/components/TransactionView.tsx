@@ -219,7 +219,11 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
     const monthStart = `${month}-01`;
     const monthEnd = `${month}-31`;
     let result = allTransactions
-      .filter((t) => monthFilter === 'all' || (t.txnDate >= monthStart && t.txnDate <= monthEnd))
+      // A moved transaction is listed under both its bank-date month and the month it counts in
+      // (budget totals use txnDate only, so it is still counted once).
+      .filter((t) => monthFilter === 'all'
+        || (t.txnDate >= monthStart && t.txnDate <= monthEnd)
+        || (!!t.originalTxnDate && t.originalTxnDate >= monthStart && t.originalTxnDate <= monthEnd))
       .sort((a, b) => (b.txnDate > a.txnDate ? 1 : b.txnDate < a.txnDate ? -1 : b.id - a.id));
     if (transferFilter) result = result.filter((t) => t.isTransfer);
     if (catFilter === 'categorized') result = result.filter((t) => !t.isTransfer && txnIsCategorized(t, splitsMap));
@@ -247,6 +251,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
         return t.descriptor.toLowerCase().includes(q)
           || (t.instrument ?? '').toLowerCase().includes(q)
           || t.txnDate.includes(q)
+          || (t.originalTxnDate ?? '').includes(q)
           || String(t.amount).includes(q)
           || catName.toLowerCase().includes(q)
           || (t.comment ?? '').toLowerCase().includes(q);
