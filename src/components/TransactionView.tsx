@@ -263,6 +263,8 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
         if (splits && splits.length > 0) return splits.map((s) => catMap.get(s.categoryId) ?? '').join(', ');
         return t.categoryId != null ? (catMap.get(t.categoryId) ?? '') : '';
       };
+      // Same sign rule as TransactionRow: credit if flagged or stored negative; magnitude is |amount|.
+      const signedAmount = (t: Transaction) => (isCredit(t) || t.amount < 0 ? 1 : -1) * Math.abs(t.amount);
       const text = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true });
       const cmp = (a: Transaction, b: Transaction): number => {
         switch (sort.key) {
@@ -270,7 +272,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
           case 'descriptor': return text(a.descriptor, b.descriptor);
           case 'instrument': return text(a.instrument ?? '', b.instrument ?? '');
           // Signed like the table shows it: credits positive, expenses negative.
-          case 'amount': return (isCredit(a) ? a.amount : -a.amount) - (isCredit(b) ? b.amount : -b.amount);
+          case 'amount': return signedAmount(a) - signedAmount(b);
           case 'category': return text(catLabel(a), catLabel(b));
         }
       };
