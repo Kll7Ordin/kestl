@@ -182,7 +182,7 @@ export function buildRows(
     const isIncome = cat?.isIncome === true || (cat != null && INCOME_CATEGORY_NAMES.has(cat.name));
     const catBudgetByMonth = budgetsByCat.get(b.categoryId) ?? new Map<string, number>();
     const targetInMonth = targetMode === 'current'
-      ? () => b.targetAmount
+      ? (pm: string) => (catBudgetByMonth.has(pm) ? b.targetAmount : undefined)
       : (pm: string) => catBudgetByMonth.get(pm);
     return {
       categoryId: b.categoryId,
@@ -226,8 +226,17 @@ export function buildSandboxRows(
   const catById = new Map(categories.map((c) => [c.id, c]));
   const covered = new Set<number>();
 
+  const budgetedMonths = new Map<number, Set<string>>();
+  for (const b of ctx.d.budgets) {
+    let m = budgetedMonths.get(b.categoryId);
+    if (!m) { m = new Set(); budgetedMonths.set(b.categoryId, m); }
+    m.add(b.month);
+  }
+
   const rows = sandbox.items.map((item): BudgetRow => {
     const catIds = [item.categoryId, ...(item.sourceCategoryIds ?? [])];
+    // A month only counts if the line (or a category merged into it) had a budget line then
+    const hadBudget = (pm: string) => catIds.some((id) => budgetedMonths.get(id)?.has(pm));
     for (const id of catIds) covered.add(id);
     const isIncome = item.isIncome === true;
     return {
@@ -238,7 +247,7 @@ export function buildSandboxRows(
       target: item.targetAmount,
       carry: 0,
       isIncome,
-      ...lineStats(ctx, catIds, isIncome, item.targetAmount, () => item.targetAmount),
+      ...lineStats(ctx, catIds, isIncome, item.targetAmount, (pm) => (hadBudget(pm) ? item.targetAmount : undefined)),
       groupId: item.groupId ?? null,
       sortOrder: item.sortOrder ?? 0,
       sourceCategoryIds: item.sourceCategoryIds,

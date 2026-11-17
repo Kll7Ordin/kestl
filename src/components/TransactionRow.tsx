@@ -69,7 +69,16 @@ export const TxnRow = memo(function TxnRow({
 
   return (
     <tr className={rowClass} style={t.isTransfer ? { opacity: 0.55 } : undefined}>
-      <td style={{ whiteSpace: 'nowrap' }}>{t.txnDate}</td>
+      <td style={{ whiteSpace: 'nowrap' }}>
+        {t.originalTxnDate && t.originalTxnDate !== t.txnDate ? (
+          <>
+            {t.originalTxnDate}
+            <span style={{ marginLeft: 6, fontSize: '0.8em', opacity: 0.7 }} title="Moved: counted in a different month">
+              counted in {t.txnDate.slice(0, 7)}
+            </span>
+          </>
+        ) : t.txnDate}
+      </td>
       <td
         className="descriptor-cell"
         data-tooltip={t.descriptor}
