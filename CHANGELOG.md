@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.22.0](https://github.com/Kll7Ordin/kestl/compare/v2.21.0...v2.22.0) (2026-11-17)
+
+
+### Features
+
+* segmented Target/Period toggles and restyled Total card ([c56db6b](https://github.com/Kll7Ordin/kestl/commit/c56db6b99a61a905bc6309c8c7883e77aa2e2d4a))
+
+
+### Bug Fixes
+
+* 12M/3M avg columns follow Target toggle; remove projected month-end ([431ab2c](https://github.com/Kll7Ordin/kestl/commit/431ab2ca758e2fb29485e1cc480e77ac4c719810))
+* amount sort uses the same sign as the displayed amount ([a9da6cc](https://github.com/Kll7Ordin/kestl/commit/a9da6ccb703e6ef2f42bd91c8787923a19cb5d16))
+* list moved transactions under both months with a counted-in stamp ([67883d0](https://github.com/Kll7Ordin/kestl/commit/67883d0783642037412d9913f9046fd1ded4b14d))
+* skip months without a budget in avg +/- calculations ([3a6076b](https://github.com/Kll7Ordin/kestl/commit/3a6076ba69299566138d58dadd7b8c6757029133))
+* type error in target toggle ([4b05e1a](https://github.com/Kll7Ordin/kestl/commit/4b05e1a895d167e074c242eaa33f303ae3f82d3b))
+
 ## [2.21.0](https://github.com/Kll7Ordin/kestl/compare/v2.20.0...v2.21.0) (2026-11-12)
 
 
