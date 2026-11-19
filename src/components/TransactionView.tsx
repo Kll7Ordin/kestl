@@ -1,4 +1,5 @@
 import { useState, useMemo, useSyncExternalStore, useEffect, useRef, useDeferredValue } from 'react';
+import { RuleAmountInput } from './RuleAmountInput';
 import { createPortal } from 'react-dom';
 import {
   getData,
@@ -1005,7 +1006,7 @@ export function TransactionView({ search = '', navFilter, onNavConsumed, txnAiLo
                 {hasDollarSplit ? 'Amount (required for $ splits)' : 'Require amount'}
               </label>
               {(ruleAmountRequired || hasDollarSplit) && (
-                <input type="number" step="0.01" value={ruleAmount} onChange={(e) => setRuleAmount(e.target.value)} placeholder="0.00" style={{ width: '100px' }} />
+                <RuleAmountInput value={ruleAmount} onChange={setRuleAmount} width="100px" />
               )}
             </div>
 

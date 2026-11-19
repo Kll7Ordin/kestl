@@ -1,4 +1,5 @@
 import { useState, useEffect, useSyncExternalStore, useMemo } from 'react';
+import { RuleAmountInput } from './RuleAmountInput';
 import { createPortal } from 'react-dom';
 import { PasswordPrompt } from './PasswordPrompt';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -1143,7 +1144,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
                   <input type="checkbox" id="rule-amount-cb2" checked={!!newRuleAmountRequired} onChange={(e) => { setNewRuleAmountRequired(e.target.checked); if (!e.target.checked) setNewRuleAmount(''); }} />
                   <label htmlFor="rule-amount-cb2" style={{ fontSize: '0.8rem', whiteSpace: 'nowrap' }}>Amt</label>
                   {newRuleAmountRequired && (
-                    <input type="number" step="0.01" value={newRuleAmount} onChange={(e) => setNewRuleAmount(e.target.value)} placeholder="0" style={{ width: '80px' }} />
+                    <RuleAmountInput value={newRuleAmount} onChange={setNewRuleAmount} width="80px" />
                   )}
                 </div>
                 <button className="btn btn-primary" style={{ flexShrink: 0, alignSelf: 'flex-end' }} onClick={() => handleAddRule(false)}>Add Rule</button>
@@ -1221,7 +1222,7 @@ export function SettingsView({ zoom = 1, onZoomChange, search = '', darkMode = f
               </div>
               <div className="field">
                 <label>Amount condition (optional)</label>
-                <input type="number" step="0.01" value={editAmountMatch} onChange={(e) => setEditAmountMatch(e.target.value)} placeholder="any" />
+                <RuleAmountInput value={editAmountMatch} onChange={setEditAmountMatch} width="120px" />
               </div>
 
               {editSplits.length >= 2 ? (
