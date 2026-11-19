@@ -61,6 +61,8 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
     dups: Omit<Transaction, 'id'>[];
     unique: Omit<Transaction, 'id'>[];
     source: string;
+    /** Split-rule results keyed by the parsed txn object, so they survive the review step. */
+    splitsByTxn: Map<Omit<Transaction, 'id'>, Array<{ categoryId: number; amount: number }>>;
   } | null>(null);
   const [dupSelected, setDupSelected] = useState<Set<number>>(new Set());
   const [refundPrompts, setRefundPrompts] = useState<RefundCandidate[]>([]);
@@ -116,7 +118,12 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
 
     if (duplicates.length > 0) {
       setDupSelected(new Set());
-      setDupReview({ dups: duplicates, unique, source });
+      setDupReview({
+        dups: duplicates,
+        unique,
+        source,
+        splitsByTxn: new Map(splitActions.map((a) => [txns[a.txnIndex], a.splits])),
+      });
       return;
     }
 
@@ -178,6 +185,16 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
     });
   }
 
+  /** Split actions (indexed into `toInsert`) for the txns in the review that are being inserted. */
+  function splitActionsFor(review: NonNullable<typeof dupReview>, toInsert: Omit<Transaction, 'id'>[]) {
+    const out: Array<{ txnIndex: number; splits: Array<{ categoryId: number; amount: number }> }> = [];
+    toInsert.forEach((t, i) => {
+      const splits = review.splitsByTxn.get(t);
+      if (splits) out.push({ txnIndex: i, splits });
+    });
+    return out;
+  }
+
   async function confirmDupImportSkip() {
     if (!dupReview) return;
     await finalizeImportResult({
@@ -185,17 +202,20 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
       source: dupReview.source,
       parsed: dupReview.unique.length + dupReview.dups.length,
       duplicatesDropped: dupReview.dups.length,
+      splitActions: splitActionsFor(dupReview, dupReview.unique),
     });
     setDupReview(null);
   }
 
   async function confirmDupImportAll() {
     if (!dupReview) return;
+    const all = [...dupReview.unique, ...dupReview.dups];
     await finalizeImportResult({
-      txnsToInsert: [...dupReview.unique, ...dupReview.dups],
+      txnsToInsert: all,
       source: dupReview.source,
       parsed: dupReview.unique.length + dupReview.dups.length,
       duplicatesDropped: 0,
+      splitActions: splitActionsFor(dupReview, all),
     });
     setDupReview(null);
   }
@@ -204,11 +224,13 @@ export function ImportView({ onOpenParserSettings }: ImportViewProps = {}) {
     if (!dupReview) return;
     const selectedDups = dupReview.dups.filter((_, i) => dupSelected.has(i));
     const skippedCount = dupReview.dups.length - selectedDups.length;
+    const chosen = [...dupReview.unique, ...selectedDups];
     await finalizeImportResult({
-      txnsToInsert: [...dupReview.unique, ...selectedDups],
+      txnsToInsert: chosen,
       source: dupReview.source,
       parsed: dupReview.unique.length + dupReview.dups.length,
       duplicatesDropped: skippedCount,
+      splitActions: splitActionsFor(dupReview, chosen),
     });
     setDupReview(null);
   }
