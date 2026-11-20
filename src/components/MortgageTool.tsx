@@ -23,6 +23,7 @@ import {
   type PrepayFrequency,
   getDisplaySettings,
   updateDisplaySettings,
+  withoutUndo,
 } from '../db';
 import { SearchableSelect } from './SearchableSelect';
 import { DateInput } from './DateInput';
@@ -324,12 +325,15 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
     setPaymentAutoFilledFrom(setupPaymentCatId);
   }, [setupPaymentCatId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-import transactions when ledger tab is opened
+  // Auto-import newly categorized payments when the tool opens (overview) and when
+  // the ledger tab is opened, so the balance and "as of" date stay current.
+  const autoImportRunning = useRef(false);
   useEffect(() => {
-    if (internalTab === 'ledger' && config) {
+    if ((internalTab === 'overview' || internalTab === 'ledger') && config && !autoImportRunning.current) {
+      autoImportRunning.current = true;
       setImportStatus(null);
-      const currentLedger = getMortgageLedger();
-      autoImportFromTransactions(config, currentLedger);
+      withoutUndo(() => autoImportFromTransactions(config, getMortgageLedger()))
+        .finally(() => { autoImportRunning.current = false; });
     }
   }, [internalTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
