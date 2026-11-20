@@ -24,7 +24,10 @@ import {
   getDisplaySettings,
   updateDisplaySettings,
   withoutUndo,
+  withUndo,
+  setMortgageLedger,
 } from '../db';
+import { periodRate, recalcLedger, findPaymentChange, withRateChange, rateAt } from '../logic/mortgage';
 import { SearchableSelect } from './SearchableSelect';
 import { DateInput } from './DateInput';
 import { formatAmount, formatDate } from '../utils/format';
@@ -59,11 +62,6 @@ function CurrencyInput({ value, onChange, placeholder, style, autoFocus }: {
 }
 
 // ── Math helpers ──────────────────────────────────────────────────────────────
-
-function periodRate(annualRate: number, freq: MortgageConfig['paymentFrequency']): number {
-  const periods = freq === 'monthly' ? 12 : freq === 'biweekly' ? 26 : 24;
-  return Math.pow(1 + annualRate / 2, 2 / periods) - 1;
-}
 
 function addPaymentPeriods(date: Date, freq: MortgageConfig['paymentFrequency'], n: number): Date {
   const d = new Date(date);
@@ -482,6 +480,46 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
     setDeleteConfirmId(null);
   }
 
+  /** Recalculate stored ledger balances for `cfg` and make the config balance match the latest entry. */
+  async function syncLedger(cfg: MortgageConfig) {
+    const recalced = recalcLedger(getMortgageLedger(), cfg);
+    await setMortgageLedger(recalced);
+    const last = recalced[recalced.length - 1];
+    const updated = last ? { ...cfg, outstandingBalance: last.balance, lastBalanceDate: last.date } : cfg;
+    await setMortgageConfig(updated);
+    setConfigState(updated);
+    refreshLedger();
+  }
+
+  async function resolvePaymentChange(kind: 'rate' | 'frequency' | 'ignore') {
+    if (!config || !paymentChange) return;
+    const { key, date, newAmount } = paymentChange;
+    let updated: MortgageConfig;
+    if (kind === 'ignore') {
+      updated = { ...config, ignoredPayments: [...(config.ignoredPayments ?? []), key] };
+    } else if (kind === 'frequency') {
+      updated = {
+        ...config,
+        paymentFrequency: changeFreq,
+        regularPayment: newAmount,
+        resolvedPaymentChanges: [...(config.resolvedPaymentChanges ?? []), key],
+      };
+    } else {
+      const rate = parseFloat(changeRateInput) / 100;
+      if (isNaN(rate) || rate < 0 || rate > 0.3) return;
+      const firstDate = [...ledger].sort((a, b) => a.date.localeCompare(b.date))[0]?.date ?? date;
+      const rateHistory = withRateChange(config, date, rate, firstDate);
+      updated = {
+        ...config,
+        rateHistory,
+        annualRate: rateAt({ annualRate: rate, rateHistory }, '9999-12-31'),
+        regularPayment: newAmount,
+        resolvedPaymentChanges: [...(config.resolvedPaymentChanges ?? []), key],
+      };
+    }
+    await withUndo('Mortgage payment change', () => syncLedger(updated));
+  }
+
   async function autoImportFromTransactions(cfg: MortgageConfig, currentLedger: MortgageLedgerEntry[]) {
     if (!cfg.paymentCategoryId && !cfg.prepaymentCategoryId) return;
     const { transactions } = getData();
@@ -536,17 +574,8 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
       await addMortgageLedgerEntry(entry);
       prevBal = entry.balance;
     }
-    // Use the most recent ledger entry (by date) as the current balance,
-    // not prevBal — because historical (pre-anchor) entries don't represent the current balance.
-    const allLedger = getMortgageLedger();
-    const sortedLedger = [...allLedger].sort((a, b) => a.date.localeCompare(b.date));
-    const lastEntry = sortedLedger[sortedLedger.length - 1];
-    const currentBal = lastEntry?.balance ?? prevBal;
-    const currentDate = lastEntry?.date ?? candidates[candidates.length - 1].txnDate;
-    const updated = { ...cfg, outstandingBalance: currentBal, lastBalanceDate: currentDate };
-    await setMortgageConfig(updated);
-    setConfigState(updated);
-    refreshLedger();
+    // Recalculate with the rate history so the balance comes from the latest entry.
+    await syncLedger(cfg);
     setImportStatus({ imported: candidates.length });
   }
 
@@ -655,46 +684,24 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
     }
   }, [config]);
 
-  // ── Display ledger — recalculates pre-anchor entry balances via exact backwards math ─
-  const displayLedger = useMemo(() => {
-    if (ledger.length === 0) return ledger;
-    const sorted = [...ledger].sort((a, b) => a.date.localeCompare(b.date));
-    const anchorIdx = sorted.findIndex((e) => e.type === 'opening_balance' || e.type === 'balance_reset');
-    if (anchorIdx <= 0) return sorted;
-    const anchor = sorted[anchorIdx];
-    const preAnchor = sorted.slice(0, anchorIdx);
-    if (preAnchor.length === 0) return sorted;
+  // ── Display ledger — every entry's split/balance recomputed with the rate in effect on its date ─
+  const displayLedger = useMemo(
+    () => (config && ledger.length > 0 ? recalcLedger(ledger, config) : ledger),
+    [ledger, config],
+  );
 
-    const r = config ? periodRate(config.annualRate, config.paymentFrequency) : 0;
-
-    // Exact backwards calculation: work from anchor balance back through each entry
-    // to find the true starting balance before the first pre-anchor entry.
-    let startBal = anchor.balance;
-    for (let i = preAnchor.length - 1; i >= 0; i--) {
-      const e = preAnchor[i];
-      if (e.type === 'prepayment') {
-        startBal = startBal + e.amount;
-      } else if (e.type === 'payment') {
-        // balance_after = balance_before*(1+r) - amount  =>  balance_before = (balance_after + amount)/(1+r)
-        startBal = (startBal + e.amount) / (1 + r);
-      }
-    }
-
-    // Forward pass with correct interest/principal splits
-    let runningBal = startBal;
-    const recalcPre = preAnchor.map((e) => {
-      let interest = 0;
-      let principal = e.amount;
-      if (e.type === 'payment' && r > 0) {
-        interest = Math.max(0, runningBal * r);
-        principal = Math.max(0, Math.min(e.amount - interest, runningBal));
-      }
-      runningBal = Math.max(0, runningBal - principal);
-      return { ...e, balance: runningBal, interestPortion: interest, principalPortion: principal };
-    });
-
-    return [...recalcPre, ...sorted.slice(anchorIdx)];
-  }, [ledger, config]);
+  // First regular payment amount change not yet answered (usually a variable-rate change)
+  const paymentChange = useMemo(
+    () => (config ? findPaymentChange(displayLedger, config) : null),
+    [displayLedger, config],
+  );
+  const [changeRateInput, setChangeRateInput] = useState('');
+  const [changeFreqMode, setChangeFreqMode] = useState(false);
+  const [changeFreq, setChangeFreq] = useState<MortgageConfig['paymentFrequency']>('monthly');
+  useEffect(() => {
+    setChangeRateInput(paymentChange?.impliedRate != null ? (paymentChange.impliedRate * 100).toFixed(2) : '');
+    setChangeFreqMode(false);
+  }, [paymentChange?.key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const projectedRemainingInterest = useMemo(() => {
     if (!projection) return 0;
@@ -1058,6 +1065,50 @@ export function MortgageTool({ onShowMortgageTabChange }: Props) {
               <button className="btn btn-ghost" onClick={() => { setInternalTab('overview'); setSetupAttempted(false); }}>Cancel</button>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ── Payment change prompt ──────────────────────────────────────────── */}
+      {paymentChange && config && (internalTab === 'overview' || internalTab === 'ledger') && (
+        <div className="card" style={{ marginBottom: '0.75rem', borderLeft: '3px solid #f59e0b' }}>
+          <div style={{ fontWeight: 600, marginBottom: '0.3rem' }}>Your payment changed</div>
+          <div style={{ fontSize: '0.85rem', marginBottom: '0.6rem' }}>
+            On {paymentChange.date} your payment went from <strong>${formatAmount(paymentChange.oldAmount)}</strong> to{' '}
+            <strong>${formatAmount(paymentChange.newAmount)}</strong>.{' '}
+            {paymentChange.impliedRate != null ? (
+              <>That matches a rate change from {(paymentChange.oldRate * 100).toFixed(2)}% to about{' '}
+                <strong>{(paymentChange.impliedRate * 100).toFixed(2)}%</strong> with the same payoff date.</>
+            ) : (
+              <>If your rate changed, enter the new rate.</>
+            )}
+          </div>
+          {!changeFreqMode ? (
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <label style={{ fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                New rate
+                <input type="number" step="0.01" min="0" max="30" value={changeRateInput} onChange={(e) => setChangeRateInput(e.target.value)} style={{ width: 80 }} />%
+              </label>
+              <button className="btn btn-primary btn-sm" disabled={!changeRateInput} onClick={() => resolvePaymentChange('rate')}>
+                Update rate
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setChangeFreq(config.paymentFrequency); setChangeFreqMode(true); }}>
+                Payment frequency changed
+              </button>
+              <button className="btn btn-ghost btn-sm" onClick={() => resolvePaymentChange('ignore')}>
+                Ignore (one-off)
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <select value={changeFreq} onChange={(e) => setChangeFreq(e.target.value as MortgageConfig['paymentFrequency'])}>
+                <option value="monthly">Monthly</option>
+                <option value="semi-monthly">Semi-monthly</option>
+                <option value="biweekly">Bi-weekly</option>
+              </select>
+              <button className="btn btn-primary btn-sm" onClick={() => resolvePaymentChange('frequency')}>Save frequency</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => setChangeFreqMode(false)}>Back</button>
+            </div>
+          )}
         </div>
       )}
 

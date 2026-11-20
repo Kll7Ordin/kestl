@@ -2255,6 +2255,18 @@ export interface MortgageConfig {
   // Regular prepayment schedule
   prepayAmount?: number;
   prepayFrequency?: PrepayFrequency;
+
+  // Rate changes, each effective from its date. Empty/missing = annualRate applies to everything.
+  rateHistory?: MortgageRateChange[];
+  // Payment amount changes the user has answered (key = "date:amount"), so they aren't asked again.
+  resolvedPaymentChanges?: string[];
+  // One-off payments to leave out when looking for a regular payment change.
+  ignoredPayments?: string[];
+}
+
+export interface MortgageRateChange {
+  date: string; // ISO date the rate took effect
+  rate: number; // decimal
 }
 
 export interface MortgageLedgerEntry {
@@ -2297,6 +2309,13 @@ export async function addMortgageLedgerEntry(
   data.mortgageLedger.sort((a, b) => a.date.localeCompare(b.date));
   await persist();
   return saved;
+}
+
+/** Replace the whole ledger (used after recalculating balances for a rate change). */
+export async function setMortgageLedger(entries: MortgageLedgerEntry[]): Promise<void> {
+  pushUndoSnapshot('Recalculate mortgage ledger');
+  data.mortgageLedger = [...entries].sort((a, b) => a.date.localeCompare(b.date));
+  await persist();
 }
 
 export async function deleteMortgageLedgerEntry(id: number): Promise<void> {
