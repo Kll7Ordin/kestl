@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.23.0](https://github.com/Kll7Ordin/kestl/compare/v2.22.0...v2.23.0) (2026-11-20)
+
+
+### Features
+
+* debit/credit toggle for rule amounts ([1a20d6a](https://github.com/Kll7Ordin/kestl/commit/1a20d6acf8ffad90330cb9888c7d7091cb61ea49))
+* detect mortgage payment changes and infer the new rate ([a0fd199](https://github.com/Kll7Ordin/kestl/commit/a0fd1993f25915f816a43f01adad2ac1420d5ae0))
+
+
+### Bug Fixes
+
+* auto-import mortgage payments when opening the mortgage tool ([bf0bdf8](https://github.com/Kll7Ordin/kestl/commit/bf0bdf80eb1451f90150cd913bae01c89869dc80))
+* keep split rules through duplicate review ([432a9cb](https://github.com/Kll7Ordin/kestl/commit/432a9cb0783bad1e2ac12c32bae16d9b69c393e8))
+
 ## [2.22.0](https://github.com/Kll7Ordin/kestl/compare/v2.21.0...v2.22.0) (2026-11-17)
 
 
